@@ -4,25 +4,40 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "PySIPio"
-version = "1.8.0"
-description = "Python SIP Library for Custom VoIP Solutions"
+version = "2.0.0"
+description = "High-performance async Python SIP/VoIP library"
 authors = [{name = "Moha Abdi", email = "mohaa6052@gmail.com"}]
 license = {text = "MIT"}
 readme = "README.md"
-requires-python = ">=3.8"
+requires-python = ">=3.10"
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
     "License :: OSI Approved :: MIT License",
     "Operating System :: OS Independent",
     "Topic :: Communications :: Internet Phone",
     "Topic :: Software Development :: Libraries :: Python Modules",
+    "Framework :: AsyncIO",
+    "Development Status :: 4 - Beta",
 ]
 dependencies = [
-    "pydub>=0.25.1",
-    "requests>=2.25.1",
-    "edge-tts>=5.0.0",
-    "python-dotenv>=0.19.0",
+    "numpy>=1.21.0",
+    "edge-tts>=6.1.0",
+    "python-dotenv>=1.0.0",
+]
+
+[project.optional-dependencies]
+uvloop = ["uvloop>=0.19.0"]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+all = [
+    "uvloop>=0.19.0",
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
 ]
 
 keywords = [
@@ -31,22 +46,27 @@ keywords = [
     "Session Initiation Protocol",
     "Voice over IP",
     "telephony",
-    "communication",
-    "UDP",
+    "RTP",
     "async",
-    "asynchronous",
-    "call handling",
+    "asyncio",
+    "high-performance",
     "PBX",
     "IVR",
-    "interactive voice response",
+    "call center",
+    "WebRTC",
 ]
 
 [project.urls]
 "Homepage" = "https://github.com/moha-abdi/PySIP"
 "Bug Tracker" = "https://github.com/moha-abdi/PySIP/issues"
+"Documentation" = "https://github.com/moha-abdi/PySIP#readme"
 
 [tool.setuptools.packages.find]
 include = ["PySIP", "PySIP.*"]
 
-[tool.setuptools.package-data]
-PySIP = [".github/images/*.png"]
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]

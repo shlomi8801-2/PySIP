@@ -2,346 +2,301 @@
   <img src="https://raw.githubusercontent.com/moha-abdi/pysip/main/.github/images/banner.png" alt="PySIP Logo" style="display: block; margin: 0 auto; width: 50%;">
 </p>
 <p align="center">
-  <b>Python SIP Library for Custom VoIP Solutions</b>
+  <b>High-Performance Async Python SIP/VoIP Library</b>
 </p>
 
-**PySIP** is an asynchronous Python library designed to simplify working with the Session Initiation Protocol (SIP) for VoIP communication. Whether you're building automated call systems, interactive voice response (IVR) menus, or any SIP-based application, PySIP gives you the flexibility to create and manage SIP accounts, handle calls, and implement custom logic with ease.
-
-## ✨ **Features**
-
-<table style="width: 100%; border-collapse: separate; border-spacing: 0 10px;">
-  <tr>
-    <th style="text-align: left; padding: 10px 0;">Feature</th>
-    <th style="text-align: left; padding: 10px 0;">Description</th>
-  </tr>
-  <tr>
-    <td style="padding: 10px; font-weight: bold;">
-      Complete SIP Account Management
-    </td>
-    <td style="padding: 10px; border-radius: 0 6px 6px 0;">
-      Easily create, register, and manage SIP accounts.
-    </td>
-  </tr>
-  <tr>
-    <td style="padding: 10px; font-weight: bold;">
-      Custom Call Flows
-    </td>
-    <td style="padding: 10px; border-radius: 0 6px 6px 0;">
-      Write scripts to automate call flows with your own business logic.
-    </td>
-  </tr> 
-  <tr>
-    <td style="padding: 10px; font-weight: bold;">
-      UDP Transport Layer
-    </td>
-    <td style="padding: 10px; border-radius: 0 6px 6px 0;">
-      Asynchronous, efficient UDP transport for sending and receiving SIP messages.
-    </td>
-  </tr>
-  <tr>
-    <td style="padding: 10px; font-weight: bold;">
-      Flexible Call Handling
-    </td>
-    <td style="padding: 10px; border-radius: 0 6px 6px 0;">
-      Handle incoming and outgoing SIP calls, play messages, and gather user input.
-    </td>
-  </tr>
-  <tr>
-    <td style="padding: 10px; font-weight: bold;">
-      Fully Extensible
-    </td>
-    <td style="padding: 10px; border-radius: 0 6px 6px 0;">
-      Includes an example bot for appointment booking, but you can easily write any SIP-based automation you need.
-    </td>
-  </tr>
-</table>
-
-## 📚 **Table of Contents**
-
-1. [Installation](#-installation)
-2. [Project Structure](#-project-structure)
-3. [Getting Started](#-getting-started)
-4. [Detailed Usage](#-detailed-usage)
-   - [SIP Account](#sip-account)
-   - [Call Handling](#call-handling)
-   - [UDP Transport](#udp-transport)
-5. [Example Script](#-example-script)
-6. [Creating Your Custom SIP Scripts](#-creating-your-custom-sip-scripts)
-7. [Contributing](#-contributing)
+<p align="center">
+  <a href="#features">Features</a> •
+  <a href="#installation">Installation</a> •
+  <a href="#quick-start">Quick Start</a> •
+  <a href="#documentation">Documentation</a> •
+  <a href="#contributing">Contributing</a>
+</p>
 
 ---
 
-## 🚀 **Installation**
+**PySIP v2** is a complete rewrite of the PySIP library, featuring a high-performance async architecture built on Python's `asyncio`. Designed for building scalable VoIP applications, call centers, IVR systems, and SIP-based automation.
 
-### Option 1: Install from PyPI
+## ✨ Features
 
-You can install PySIP directly from PyPI using pip:
+| Feature | Description |
+|---------|-------------|
+| **Pure Async Architecture** | Built on `asyncio` with zero threads for RTP handling |
+| **High Performance** | 100+ concurrent calls on standard hardware |
+| **RFC Compliant** | SIP (RFC 3261), SDP (RFC 4566), RTP (RFC 3550) |
+| **G.711 Codecs** | Numpy-optimized PCMU/PCMA with lookup tables |
+| **Text-to-Speech** | Built-in Edge TTS integration |
+| **DTMF Support** | RFC 2833 events + inband detection |
+| **AMD** | Answering Machine Detection |
+| **Call Recording** | Async call recording to WAV |
+| **uvloop Support** | Optional 2-3x performance boost |
+
+## 📦 Installation
+
+### From PyPI
 
 ```bash
 pip install PySIPio
 ```
 
-> [!CAUTION]
-> Note that the package name on PyPI is `PySIPio` and not `PySIP`
-
-### Option 2: Install from source
-
-#### Step 1: Clone the repository
+### From Source
 
 ```bash
 git clone https://github.com/moha-abdi/PySIP.git
 cd PySIP
+pip install -e .
 ```
 
-#### Step 2: Install dependencies
-
-Ensure you have Python 3.8+ installed. Install the required dependencies using:
+### With Optional Dependencies
 
 ```bash
-pip install -r requirements.txt
+# With uvloop for better performance (Linux/macOS)
+pip install PySIPio[uvloop]
+
+# With development tools
+pip install PySIPio[dev]
+
+# Everything
+pip install PySIPio[all]
 ```
 
----
+## 🚀 Quick Start
 
-## 📁 **Project Structure**
-
-The project is structured to provide a clean separation between the core SIP library and any custom scripts you want to write. Here's an overview of the project layout:
-
-
-```
-PySIP/
-│
-├── PySIP/                     # Core library files
-│   ├── sip_account.py          # SIP account management
-│   ├── sip_core.py             # SIP message parsing and handling
-│   ├── udp_handler.py          # Asynchronous UDP transport for SIP
-│
-├── scripts/                    # Example custom scripts
-│   └── appointment_booking_bot.py  # Example bot for appointment booking
-│
-├── test.py                     # Example usage of PySIP for testing
-├── requirements.txt            # Project dependencies
-├── .env.example                # Example environment configuration
-└── README.md                   # Project documentation
-```
-
----
-
-## 🏁 **Getting Started**
-
-### Step 1: Environment Setup
-
-Create a `.env` file in your working directory to store your SIP account credentials and server details:
-
-```bash
-SIP_USERNAME=your_sip_username
-SIP_PASSWORD=your_sip_password
-SIP_SERVER=your_sip_server
-```
-
-### Step 2: Setting Up a SIP Account
-
-A SIP account is essential for handling calls. To start, you need to create an instance of the `SipAccount` class, which requires your SIP credentials (username, password, and server). Here's how to do it:
-
-```python
-from PySIP.sip_account import SipAccount
-import os
-from dotenv import load_dotenv
-
-# Load SIP credentials from .env file
-load_dotenv()
-
-account = SipAccount(
-    os.environ["SIP_USERNAME"],
-    os.environ["SIP_PASSWORD"],
-    os.environ["SIP_SERVER"],
-)
-```
-
-### Step 3: Registering the Account
-
-Once the `SipAccount` is created, the next step is to register it with the SIP server:
-
-```python
-await account.register()
-```
-
-This sends a SIP `REGISTER` request to the server to activate the account. Once registered, you can make calls or listen for incoming calls.
-
----
-
-## 📘 **Detailed Usage**
-
-### SIP Account
-
-The `SipAccount` class is at the core of PySIP. It handles all account-related tasks such as registration, making calls, and unregistering from the SIP server.
-
-#### **Instantiating a SIP Account**:
-
-```python
-account = SipAccount(username, password, server)
-```
-
-#### **Registering**:
-
-Call the `register()` method to register the SIP account with the server:
-
-```python
-await account.register()
-```
-
-#### **Making Calls**:
-
-The `make_call(destination)` method initiates a call to the destination number:
-
-```python
-call = account.make_call("destination_number")
-```
-
-#### **Handling Incoming Calls**:
-
-Use the `on_incoming_call` decorator to define a function that will handle incoming calls:
-
-```python
-@account.on_incoming_call
-async def handle_incoming_call(call: SipCall):
-    await call.accept()  # or call.reject() or call.busy()
-    await call.call_handler.say("Thank you for calling us!")
-    await call.call_handler.hangup()
-```
-
-#### **Unregistering**:
-
-When you're done, unregister the account to gracefully close the session:
-
-```python
-await account.unregister()
-```
-
-### Call Handling
-
-The `CallHandler` is responsible for handling the call flow. It allows you to say messages, gather input from the caller, or transfer the call.
-
-#### **Playing a message to the caller**:
-
-```python
-await call_handler.say("Welcome to our service.")
-```
-
-#### **Gathering user input**:
-
-Use `gather()` to gather input from the user, such as pressing a digit:
-
-```python
-dtmf_key = await call_handler.gather(length=1, timeout=5)
-```
-
-#### **Transferring the call**:
-
-You can forward the call to another number:
-
-```python
-await call_handler.transfer_to("1234567890")
-```
-
-#### **Accepting, Rejecting, or Setting Busy for Incoming Calls**:
-
-For incoming calls, you can use the following methods:
-
-```python
-await call.accept()  # Accept the incoming call
-await call.reject()  # Reject the incoming call
-await call.busy()    # Mark the line as busy for the incoming call
-```
-
-### UDP Transport
-
-
-The `UdpHandler` is an internal module that manages the asynchronous sending and receiving of SIP messages over the network.
-
-#### **Sending a message**:
-
-The `send_message()` method sends a UDP message to the SIP server or peer:
-
-```python
-self.transport.sendto(message)
-```
-
-#### **Receiving a datagram**:
-
-The `datagram_received()` method handles incoming messages, placing them in a queue for processing:
-
-```python
-self.data_q.put_nowait(data)
-```
-
-
----
-
-## 🔍 **Example Script**
-
-To demonstrate PySIP in action, we've provided a basic example of an appointment booking bot. This bot allows callers to book appointments via a phone call.
-
+### Basic Outbound Call
 
 ```python
 import asyncio
-from PySIP.sip_account import SipAccount
-from scripts.appointment_booking_bot import appointment_booking_bot
-from dotenv import load_dotenv
-import os
-
-# Load environment variables
-load_dotenv()
-
-# Initialize SIP account with credentials from .env file
-account = SipAccount(
-    os.environ["SIP_USERNAME"],
-    os.environ["SIP_PASSWORD"],
-    os.environ["SIP_SERVER"],
-)
-
-@account.on_incoming_call
-async def handle_incoming_call(call: SipCall):
-    await call.accept()
-    await call.call_handler.say("We have received your call successfully")
+from PySIP import SIPClient, CallState
 
 async def main():
-    # Register the SIP account
-    await account.register()
+    # Create and start client
+    async with SIPClient(
+        username="your_username",
+        password="your_password",
+        server="sip.example.com",
+    ) as client:
+        # Register with server
+        await client.register()
+        
+        # Make a call
+        call = client.make_call("1234567890")
+        await call.start()
+        
+        # Play TTS message
+        await call.say("Hello! This is a test call from PySIP.")
+        
+        # Gather DTMF input
+        digits = await call.gather(max_digits=4, timeout=10)
+        print(f"User pressed: {digits}")
+        
+        # Hang up
+        await call.hangup()
 
-    # Make a call to a test number (e.g., '111')
-    call = account.make_call("111")
-    call_task = asyncio.create_task(call.start())
-
-    # Run the appointment booking bot
-    await appointment_booking_bot(call.call_handler, customer_name="John")
-
-    # Wait for the call to complete, then unregister
-    await call_task
-    await account.unregister()
-
-if __name__ == "__main__":
-    asyncio.run(main())
+asyncio.run(main())
 ```
 
+### Handling Incoming Calls
 
----
+```python
+import asyncio
+from PySIP import SIPClient
 
-## 🛠 **Creating Your Custom SIP Scripts**
+async def main():
+    async with SIPClient(
+        username="your_username",
+        password="your_password", 
+        server="sip.example.com",
+    ) as client:
+        await client.register()
+        
+        @client.on_incoming_call
+        async def handle_call(call):
+            await call.answer()
+            await call.say("Welcome to PySIP! Press 1 for sales, 2 for support.")
+            
+            digit = await call.gather(max_digits=1, timeout=5)
+            
+            if digit == "1":
+                await call.transfer("sales@example.com")
+            elif digit == "2":
+                await call.transfer("support@example.com")
+            else:
+                await call.say("Invalid option. Goodbye!")
+                await call.hangup()
+        
+        # Keep running
+        await asyncio.Event().wait()
 
-While the appointment booking bot is just one example, **PySIP** is designed to let you create any SIP-based automation or custom script that fits your needs.
+asyncio.run(main())
+```
 
-To create your own script:
+### Using Environment Variables
 
-1. **Create a Python file** in the `scripts/` directory.
-2. **Write your custom call logic** using the `CallHandler` class to control the call flow.
-3. **Use the `SipAccount` to register and make calls** as demonstrated in the example script.
+Create a `.env` file:
 
----
+```bash
+SIP_USERNAME=your_username
+SIP_PASSWORD=your_password
+SIP_SERVER=sip.example.com
+```
 
-## 🤝 **Contributing**
+Then in your code:
 
-Contributions are welcome! If you would like to contribute to the development of PySIP, feel free to open issues or submit pull requests.
+```python
+import os
+from dotenv import load_dotenv
+from PySIP import SIPClient
+
+load_dotenv()
+
+client = SIPClient(
+    username=os.getenv("SIP_USERNAME"),
+    password=os.getenv("SIP_PASSWORD"),
+    server=os.getenv("SIP_SERVER"),
+)
+```
+
+## 📖 Documentation
+
+### Project Structure
+
+```
+PySIP/
+├── PySIP/
+│   ├── __init__.py          # Main exports
+│   ├── client.py             # SIPClient - main entry point
+│   ├── call.py               # Call handling
+│   ├── types.py              # Type definitions
+│   ├── exceptions.py         # Custom exceptions
+│   ├── protocol/             # Protocol implementations
+│   │   ├── sip/              # SIP parser/builder
+│   │   ├── sdp/              # SDP parser/builder
+│   │   └── rtp/              # RTP packet handling
+│   ├── transport/            # Network transports
+│   │   ├── udp.py            # UDP transport
+│   │   └── rtp.py            # RTP transport
+│   ├── media/                # Media handling
+│   │   ├── codecs/           # G.711 codecs
+│   │   ├── jitter.py         # Jitter buffer
+│   │   └── player.py         # Audio player
+│   ├── features/             # Optional features
+│   │   ├── tts/              # Text-to-speech
+│   │   ├── dtmf/             # DTMF detection
+│   │   ├── amd/              # Answering machine detection
+│   │   └── recording/        # Call recording
+│   └── session/              # Session management
+│       ├── dialog.py         # SIP dialog state
+│       ├── transaction.py    # SIP transactions
+│       └── manager.py        # Call manager
+├── tests/                    # Test suite
+├── pyproject.toml           # Project configuration
+└── README.md
+```
+
+### Core Classes
+
+#### SIPClient
+
+The main entry point for all SIP operations.
+
+```python
+from PySIP import SIPClient
+
+client = SIPClient(
+    username="user",
+    password="pass",
+    server="sip.example.com",
+    port=5060,                    # Optional, default 5060
+    transport="UDP",              # UDP, TCP, or TLS
+    local_port=0,                 # 0 for auto-assign
+    user_agent="MyApp/1.0",       # Custom User-Agent
+    register_expires=300,         # Registration expiry
+    max_concurrent_calls=100,     # Call limit
+    rtp_port_range=(10000, 20000) # RTP port range
+)
+```
+
+#### Call
+
+Represents an active call with media operations.
+
+```python
+# Make outbound call
+call = client.make_call("destination")
+await call.start(timeout=60)
+
+# Media operations
+await call.say("Hello!")                    # TTS
+await call.play("audio.wav")                # Play file
+digits = await call.gather(max_digits=4)    # Get DTMF
+await call.send_dtmf("1234")                # Send DTMF
+
+# Call control
+await call.hangup()
+await call.transfer("other@example.com")
+
+# Properties
+call.state          # CallState enum
+call.call_id        # SIP Call-ID
+call.duration       # Call duration in seconds
+```
+
+### Error Handling
+
+```python
+from PySIP import SIPClient
+from PySIP.exceptions import (
+    RegistrationError,
+    CallFailedError,
+    CallRejectedError,
+    CallTimeoutError,
+)
+
+try:
+    await client.register()
+except RegistrationError as e:
+    print(f"Registration failed: {e}")
+
+try:
+    await call.start()
+except CallTimeoutError:
+    print("No answer")
+except CallRejectedError as e:
+    print(f"Call rejected: {e.status_code} {e.reason}")
+except CallFailedError as e:
+    print(f"Call failed: {e}")
+```
+
+## 🧪 Testing
+
+```bash
+# Run all tests
+pytest tests/ -v
+
+# Run with coverage
+pytest tests/ -v --cov=PySIP
+```
+
+## 🔧 Requirements
+
+- Python 3.10+
+- numpy
+- edge-tts
+- uvloop (optional, Linux/macOS only)
+
+## 🤝 Contributing
+
+Contributions are welcome! Please feel free to submit issues and pull requests.
+
+1. Fork the repository
+2. Create a feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
+
+## 📄 License
+
+This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
 
 ---
 

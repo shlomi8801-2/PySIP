@@ -1,5 +1,17 @@
-pydub>=0.25.1
-requests>=2.25.1
-edge-tts>=5.0.0
-python-dotenv>=0.19.0
-scipy
+# PySIP v2 Dependencies
+
+# Core
+numpy>=1.21.0          # For efficient audio codec processing
+
+# TTS
+edge-tts>=6.1.0        # Microsoft Edge TTS
+
+# Optional but recommended
+uvloop>=0.19.0         # High-performance event loop (Linux/macOS)
+
+# Utilities
+python-dotenv>=1.0.0   # Environment variable management
+
+# Development
+pytest>=8.0.0          # Testing framework
+pytest-asyncio>=0.23.0 # Async test support

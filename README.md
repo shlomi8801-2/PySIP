@@ -66,7 +66,7 @@ pip install PySIPio[all]
 
 ```python
 import asyncio
-from PySIP import SIPClient, CallState
+from PySIP import SIPClient
 
 async def main():
     # Create and start client
@@ -78,18 +78,39 @@ async def main():
         # Register with server
         await client.register()
         
-        # Make a call
-        call = client.make_call("1234567890")
-        await call.start()
+        # Make a call using context manager (recommended)
+        async with client.dial("1234567890") as call:
+            # Play TTS message
+            await call.say("Hello! This is a test call from PySIP.")
+            
+            # Gather DTMF input
+            result = await call.gather(max_digits=4, timeout=10)
+            print(f"User pressed: {result.digits}")
+            print(f"Terminated by: {result.terminated_by}")
+            # Auto-hangup when exiting context
+
+asyncio.run(main())
+```
+
+### Manual Call Control
+
+```python
+import asyncio
+from PySIP import SIPClient
+
+async def main():
+    async with SIPClient(
+        username="your_username",
+        password="your_password",
+        server="sip.example.com",
+    ) as client:
+        await client.register()
         
-        # Play TTS message
-        await call.say("Hello! This is a test call from PySIP.")
+        # Create and dial manually
+        call = client.dial("1234567890")
+        await call.dial()  # Start the call
         
-        # Gather DTMF input
-        digits = await call.gather(max_digits=4, timeout=10)
-        print(f"User pressed: {digits}")
-        
-        # Hang up
+        await call.say("Hello!")
         await call.hangup()
 
 asyncio.run(main())
@@ -114,11 +135,11 @@ async def main():
             await call.answer()
             await call.say("Welcome to PySIP! Press 1 for sales, 2 for support.")
             
-            digit = await call.gather(max_digits=1, timeout=5)
+            result = await call.gather(max_digits=1, timeout=5)
             
-            if digit == "1":
+            if result.digits == "1":
                 await call.transfer("sales@example.com")
-            elif digit == "2":
+            elif result.digits == "2":
                 await call.transfer("support@example.com")
             else:
                 await call.say("Invalid option. Goodbye!")
@@ -221,17 +242,24 @@ client = SIPClient(
 Represents an active call with media operations.
 
 ```python
-# Make outbound call
-call = client.make_call("destination")
-await call.start(timeout=60)
+# Make outbound call (context manager - recommended)
+async with client.dial("destination") as call:
+    await call.say("Hello!")
+    # Auto-hangup on exit
+
+# Or manual control
+call = client.dial("destination")
+await call.dial(timeout=60)
 
 # Media operations
-await call.say("Hello!")                    # TTS
-await call.play("audio.wav")                # Play file
-digits = await call.gather(max_digits=4)    # Get DTMF
-await call.send_dtmf("1234")                # Send DTMF
+await call.say("Hello!")                        # TTS
+await call.play("audio.wav")                    # Play file
+result = await call.gather(max_digits=4)        # Get DTMF (returns GatherResult)
+await call.send_dtmf("1234")                    # Send DTMF
 
 # Call control
+await call.hold()                               # Put on hold
+await call.unhold()                             # Resume
 await call.hangup()
 await call.transfer("other@example.com")
 
@@ -258,7 +286,8 @@ except RegistrationError as e:
     print(f"Registration failed: {e}")
 
 try:
-    await call.start()
+    call = client.dial("destination")
+    await call.dial()
 except CallTimeoutError:
     print("No answer")
 except CallRejectedError as e:

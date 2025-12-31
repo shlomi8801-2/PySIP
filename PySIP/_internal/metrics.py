@@ -140,9 +140,9 @@ class MetricsCollector:
         try:
             while self._running:
                 # Measure event loop lag
-                expected_time = asyncio.get_event_loop().time()
+                expected_time = asyncio.get_running_loop().time()
                 await asyncio.sleep(self._collection_interval)
-                actual_time = asyncio.get_event_loop().time()
+                actual_time = asyncio.get_running_loop().time()
                 lag_ms = (actual_time - expected_time - self._collection_interval) * 1000
                 self._lag_samples.append(max(0, lag_ms))
                 

@@ -215,7 +215,7 @@ class AudioPlayer:
         bytes_per_packet = self._samples_per_packet * stream.format.sample_width
         interval = self._ptime_ms / 1000  # Convert to seconds
         
-        next_send_time = asyncio.get_event_loop().time()
+        next_send_time = asyncio.get_running_loop().time()
         first_packet = True
         
         try:
@@ -241,7 +241,7 @@ class AudioPlayer:
                 encoded = self._codec.encode(samples)
                 
                 # Wait for send time
-                now = asyncio.get_event_loop().time()
+                now = asyncio.get_running_loop().time()
                 if next_send_time > now:
                     await asyncio.sleep(next_send_time - now)
                 

@@ -97,6 +97,14 @@ class Transport(ABC):
         """Set callback for received data."""
         self._on_data_received = callback
     
+    def get_data_handler(self) -> Callable[[bytes, Address], None] | None:
+        """Get the current data received callback."""
+        return self._on_data_received
+    
+    def set_data_handler(self, callback: Callable[[bytes, Address], None] | None) -> None:
+        """Set the data received callback (can be None to clear)."""
+        self._on_data_received = callback
+    
     def on_state_changed(self, callback: Callable[[TransportState], None]) -> None:
         """Set callback for state changes."""
         self._on_state_changed = callback

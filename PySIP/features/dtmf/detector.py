@@ -321,10 +321,10 @@ class AsyncDTMFDetector(DTMFDetector):
             Collected digits string
         """
         digits = []
-        deadline = asyncio.get_event_loop().time() + timeout
+        deadline = asyncio.get_running_loop().time() + timeout
         
         while len(digits) < max_digits:
-            remaining = deadline - asyncio.get_event_loop().time()
+            remaining = deadline - asyncio.get_running_loop().time()
             if remaining <= 0:
                 break
             

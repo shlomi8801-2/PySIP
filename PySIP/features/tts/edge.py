@@ -142,7 +142,7 @@ class EdgeTTSEngine(TTSEngine):
             raise TTSError("pydub library not installed. Run: pip install pydub")
         
         # Run in thread pool to avoid blocking
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         return await loop.run_in_executor(
             None,
             self._convert_sync,

@@ -68,20 +68,24 @@ class Call:
     - AMD (Answering Machine Detection)
     - Call transfer
     - Async context manager for automatic cleanup
+    - Configurable headers, codecs, caller ID before connecting
     
-    Example (outbound with context manager):
+    Example (simple outbound - context manager):
         async with client.dial("sip:bob@example.com") as call:
             await call.say("Hello, this is a test call")
-            digits = await call.gather(max_digits=4, timeout=10)
+            result = await call.gather(max_digits=4, timeout=10)
             # Auto-hangup when exiting
     
-    Example (outbound manual):
-        call = client.dial("sip:bob@example.com")
-        await call.dial()
+    Example (advanced outbound - configure before connecting):
+        call = client.create_call("sip:bob@example.com")
+        call.set_caller_id("sip:support@company.com")
+        call.set_display_name("Support Line")
+        call.add_header("X-Campaign-ID", "promo123")
+        call.set_codecs(["pcmu", "pcma"])
+        call.on("ringing", lambda: print("Ringing..."))
         
-        await call.say("Hello, this is a test call")
-        digits = await call.gather(max_digits=4, timeout=10)
-        
+        await call.connect()
+        await call.say("Hello!")
         await call.hangup()
     
     Example (inbound):
@@ -129,6 +133,15 @@ class Call:
         "_hangup_cause",
         "_remote_address",
         "_incoming_invite",
+        # Configuration options (set before connect)
+        "_custom_headers",
+        "_preferred_codecs",
+        "_caller_id",
+        "_display_name",
+        "_custom_user_agent",
+        "_early_media",
+        "_connect_timeout",
+        "_event_handlers",
     )
     
     def __init__(
@@ -202,6 +215,20 @@ class Call:
         self._ended_at: float | None = None
         self._hangup_cause = HangupCause.NORMAL
         
+        # Configuration options (set before connect)
+        self._custom_headers: dict[str, str] = {}
+        self._preferred_codecs: list[str] = []
+        self._caller_id: str | None = None
+        self._display_name: str | None = None
+        self._custom_user_agent: str | None = None
+        self._early_media = False
+        self._connect_timeout = 60.0
+        self._event_handlers: dict[str, list[Callable]] = {
+            "ringing": [],
+            "answered": [],
+            "hangup": [],
+        }
+        
         # Handle incoming INVITE
         if incoming_invite:
             self._call_id = incoming_invite.call_id
@@ -260,7 +287,7 @@ class Call:
         """
         Async context manager entry.
         
-        Automatically dials outbound calls or answers inbound calls.
+        Automatically connects outbound calls or answers inbound calls.
         
         Example:
             async with client.dial("sip:bob@example.com") as call:
@@ -268,7 +295,7 @@ class Call:
                 # Auto-hangup when exiting context
         """
         if self._direction == CallDirection.OUTBOUND:
-            await self.dial()
+            await self.connect()
         else:
             await self.answer()
         return self
@@ -300,16 +327,185 @@ class Call:
         """Set AMD result handler."""
         self._on_amd_result = handler
     
-    # === Call Control ===
+    # === Configuration Methods (call before connect) ===
     
-    async def dial(self, timeout: float = 60.0) -> None:
+    def add_header(self, name: str, value: str) -> "Call":
         """
-        Dial outbound call.
+        Add a custom SIP header to the INVITE request.
         
-        Sends INVITE and waits for answer.
+        Must be called before connect().
         
         Args:
-            timeout: Maximum time to wait for answer
+            name: Header name (e.g., "X-Campaign-ID")
+            value: Header value
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.add_header("X-Campaign-ID", "promo123")
+            call.add_header("X-Account-ID", "12345")
+        """
+        self._custom_headers[name.lower()] = value
+        return self
+    
+    def set_codecs(self, codecs: list[str]) -> "Call":
+        """
+        Set preferred codec order.
+        
+        Must be called before connect().
+        
+        Args:
+            codecs: List of codec names in preference order
+                    (e.g., ["pcmu", "pcma"])
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.set_codecs(["pcmu", "pcma"])
+        """
+        self._preferred_codecs = [c.lower() for c in codecs]
+        return self
+    
+    def set_caller_id(self, uri: str) -> "Call":
+        """
+        Override the From URI (caller ID).
+        
+        Must be called before connect().
+        
+        Args:
+            uri: SIP URI to use as caller ID
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.set_caller_id("sip:+18005551234@domain.com")
+        """
+        self._caller_id = uri
+        return self
+    
+    def set_display_name(self, name: str) -> "Call":
+        """
+        Set caller display name.
+        
+        Must be called before connect().
+        
+        Args:
+            name: Display name shown on recipient's phone
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.set_display_name("Acme Support")
+        """
+        self._display_name = name
+        return self
+    
+    def set_user_agent(self, user_agent: str) -> "Call":
+        """
+        Override the User-Agent header for this call.
+        
+        Must be called before connect().
+        
+        Args:
+            user_agent: User-Agent string
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.set_user_agent("MyApp/1.0")
+        """
+        self._custom_user_agent = user_agent
+        return self
+    
+    def set_early_media(self, enabled: bool) -> "Call":
+        """
+        Enable or disable early media (183 Session Progress).
+        
+        Must be called before connect().
+        
+        Args:
+            enabled: Whether to enable early media
+            
+        Returns:
+            self for method chaining
+        """
+        self._early_media = enabled
+        return self
+    
+    def set_timeout(self, seconds: float) -> "Call":
+        """
+        Set connection timeout.
+        
+        Must be called before connect().
+        
+        Args:
+            seconds: Maximum time to wait for answer
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.set_timeout(30)  # 30 second timeout
+        """
+        self._connect_timeout = seconds
+        return self
+    
+    def on(self, event: str, handler: Callable) -> "Call":
+        """
+        Register an event handler.
+        
+        Supported events:
+        - "ringing": Called when remote party is ringing (180/183)
+        - "answered": Called when call is answered (200 OK)
+        - "hangup": Called when call ends
+        
+        Must be called before connect() for ringing/answered events.
+        
+        Args:
+            event: Event name
+            handler: Callback function (can be sync or async)
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.on("ringing", lambda: print("Ringing..."))
+            call.on("answered", lambda: print("Connected!"))
+        """
+        if event in self._event_handlers:
+            self._event_handlers[event].append(handler)
+        else:
+            logger.warning(f"Unknown event: {event}")
+        return self
+    
+    def _emit_event(self, event: str) -> None:
+        """Emit an event to all registered handlers."""
+        handlers = self._event_handlers.get(event, [])
+        for handler in handlers:
+            try:
+                result = handler()
+                # If handler is a coroutine, schedule it
+                if asyncio.iscoroutine(result):
+                    asyncio.create_task(result)
+            except Exception as e:
+                logger.error(f"Error in {event} handler: {e}")
+    
+    # === Call Control ===
+    
+    async def connect(self, timeout: float | None = None) -> None:
+        """
+        Connect outbound call.
+        
+        Sends INVITE and waits for answer. Uses configured timeout or
+        the value set via set_timeout().
+        
+        Args:
+            timeout: Maximum time to wait for answer (overrides set_timeout)
             
         Raises:
             CallFailedError: If call fails to connect
@@ -317,36 +513,55 @@ class Call:
             CallTimeoutError: If no answer within timeout
         """
         if self._direction != CallDirection.OUTBOUND:
-            raise CallStateError("dial", self._state, "Use answer() for inbound calls")
+            raise CallStateError("connect", self._state, "Use answer() for inbound calls")
         
         if self._state != CallState.IDLE:
-            raise CallStateError("dial", self._state)
+            raise CallStateError("connect", self._state)
+        
+        # Use provided timeout or configured timeout
+        actual_timeout = timeout if timeout is not None else self._connect_timeout
         
         self._state = CallState.DIALING
         
         # Start RTP session
         await self._start_rtp()
         
-        # Build SDP offer
+        # Build SDP offer with preferred codecs
         sdp_builder = SDPBuilder(local_ip=self._local_ip)
-        sdp = sdp_builder.create_offer(audio_port=self._rtp_port)
+        sdp = sdp_builder.create_offer(
+            audio_port=self._rtp_port,
+            codecs=self._preferred_codecs if self._preferred_codecs else None,
+        )
         self._local_sdp = sdp_builder.serialize(sdp)
+        
+        # Determine From URI and display name
+        from_uri = self._caller_id if self._caller_id else self._from_uri
+        
+        # Build extra headers
+        extra_headers = dict(self._custom_headers) if self._custom_headers else {}
+        
+        # Override user agent if set
+        if self._custom_user_agent:
+            extra_headers["user-agent"] = self._custom_user_agent
         
         # Build INVITE request
         self._invite_request = self._sip_builder.invite(
-            from_uri=self._from_uri,
+            from_uri=from_uri,
             to_uri=self._to_uri,
             sdp=self._local_sdp,
             call_id=self._call_id,
             from_tag=self._local_tag,
+            from_display_name=self._display_name,
+            extra_headers=extra_headers if extra_headers else None,
         )
         
         # Send INVITE
-        response = await self._send_invite(timeout)
+        response = await self._send_invite(actual_timeout)
         
         if response is None:
             self._state = CallState.TERMINATED
             self._hangup_cause = HangupCause.TIMEOUT
+            self._emit_event("hangup")
             raise CallTimeoutError("No response to INVITE")
         
         if response.status_code >= 300:
@@ -355,6 +570,7 @@ class Call:
             
             self._state = CallState.TERMINATED
             self._hangup_cause = HangupCause.REJECTED
+            self._emit_event("hangup")
             raise CallRejectedError(response.status_code, response.reason_phrase)
         
         if response.status_code >= 200:
@@ -362,6 +578,9 @@ class Call:
             self._remote_tag = response.to_tag
             self._answered_at = time.time()
             self._state = CallState.ACTIVE
+            
+            # Emit answered event
+            self._emit_event("answered")
             
             # Parse remote SDP
             if response.body:
@@ -373,15 +592,24 @@ class Call:
             
             logger.info(f"Call {self._call_id} connected")
     
-    # Alias for backward compatibility
-    async def start(self, timeout: float = 60.0) -> None:
+    # Aliases for backward compatibility
+    async def dial(self, timeout: float = 60.0) -> None:
         """
-        Start outbound call (alias for dial()).
+        Dial outbound call (alias for connect()).
         
         .. deprecated::
-            Use :meth:`dial` instead.
+            Use :meth:`connect` instead.
         """
-        return await self.dial(timeout)
+        return await self.connect(timeout)
+    
+    async def start(self, timeout: float = 60.0) -> None:
+        """
+        Start outbound call (alias for connect()).
+        
+        .. deprecated::
+            Use :meth:`connect` instead.
+        """
+        return await self.connect(timeout)
     
     async def _send_invite(self, timeout: float) -> SIPResponse | None:
         """Send INVITE and handle authentication."""
@@ -402,6 +630,10 @@ class Call:
                         pass  # Ignore TRYING
                     elif msg.status_code == 180 or msg.status_code == 183:
                         self._state = CallState.RINGING
+                        self._emit_event("ringing")
+                        # Handle early media on 183
+                        if msg.status_code == 183 and self._early_media and msg.body:
+                            self._remote_sdp = msg.body
                     elif not response_future.done():
                         response_future.set_result(msg)
             except Exception as e:
@@ -429,16 +661,23 @@ class Call:
                     challenge=challenge,
                 )
                 
-                # Rebuild INVITE with auth
+                # Rebuild INVITE with auth (preserve custom headers)
                 self._cseq += 1
+                from_uri = self._caller_id if self._caller_id else self._from_uri
+                retry_headers = dict(self._custom_headers) if self._custom_headers else {}
+                retry_headers["authorization"] = auth_header
+                if self._custom_user_agent:
+                    retry_headers["user-agent"] = self._custom_user_agent
+                
                 self._invite_request = self._sip_builder.invite(
-                    from_uri=self._from_uri,
+                    from_uri=from_uri,
                     to_uri=self._to_uri,
                     sdp=self._local_sdp,
                     call_id=self._call_id,
                     from_tag=self._local_tag,
                     cseq=self._cseq,
-                    extra_headers={"authorization": auth_header},
+                    from_display_name=self._display_name,
+                    extra_headers=retry_headers,
                 )
                 
                 # Reset and retry
@@ -548,6 +787,9 @@ class Call:
         
         self._state = CallState.TERMINATED
         self._ended_at = time.time()
+        
+        # Emit hangup event
+        self._emit_event("hangup")
         
         if self._on_hangup:
             self._on_hangup(self._hangup_cause.value)

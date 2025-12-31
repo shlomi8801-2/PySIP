@@ -282,6 +282,8 @@ class CallManager:
         if ";tag=" not in to_header:
             to_header = f"{to_header};tag={self._generate_tag()}"
         
+        from ..protocol.sip.builder import ALLOW_METHODS, SUPPORTED_EXTENSIONS
+        
         # Build 200 OK response
         response = SIPResponse(
             status_code=200,
@@ -292,10 +294,10 @@ class CallManager:
                 "To": to_header,
                 "Call-ID": request.call_id,
                 "CSeq": request.headers.get("CSeq", request.headers.get("cseq", "")),
-                "Allow": "INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, REFER, NOTIFY",
+                "Allow": ALLOW_METHODS,
                 "Accept": "application/sdp",
                 "Accept-Language": "en",
-                "Supported": "replaces, timer",
+                "Supported": SUPPORTED_EXTENSIONS,
                 "User-Agent": "PySIP/2.0",
                 "Content-Length": "0",
             },
@@ -326,16 +328,87 @@ class CallManager:
         else:
             logger.warning(f"Response for unknown call: {call_id}")
     
+    async def _send_provisional_response(
+        self,
+        request: "SIPRequest",
+        status_code: int,
+        address: Address,
+        reason_phrase: str | None = None,
+    ) -> None:
+        """Send a provisional (1xx) response to a request."""
+        from ..protocol.sip.builder import serialize_response
+        from ..protocol.sip.message import SIPResponse, get_reason_phrase
+        
+        reason = reason_phrase or get_reason_phrase(status_code)
+        
+        # Build response with required headers from request
+        response = SIPResponse(
+            status_code=status_code,
+            reason_phrase=reason,
+            headers={
+                "via": request.headers.get("via", ""),
+                "from": request.headers.get("from", ""),
+                "to": request.headers.get("to", ""),
+                "call-id": request.call_id,
+                "cseq": request.headers.get("cseq", ""),
+                "user-agent": "PySIP/2.0",
+                "content-length": "0",
+            },
+        )
+        
+        data = serialize_response(response)
+        await self._transport.send(data, address)
+        logger.debug(f"Sent {status_code} {reason} to {address}")
+    
+    async def _send_error_response(
+        self,
+        request: "SIPRequest",
+        status_code: int,
+        address: Address,
+        reason_phrase: str | None = None,
+    ) -> None:
+        """Send an error response to a request."""
+        from ..protocol.sip.builder import serialize_response
+        from ..protocol.sip.message import SIPResponse, get_reason_phrase
+        
+        reason = reason_phrase or get_reason_phrase(status_code)
+        
+        # Add to-tag for error responses
+        to_header = request.headers.get("to", "")
+        if ";tag=" not in to_header.lower():
+            to_header = f"{to_header};tag={self._generate_tag()}"
+        
+        response = SIPResponse(
+            status_code=status_code,
+            reason_phrase=reason,
+            headers={
+                "via": request.headers.get("via", ""),
+                "from": request.headers.get("from", ""),
+                "to": to_header,
+                "call-id": request.call_id,
+                "cseq": request.headers.get("cseq", ""),
+                "user-agent": "PySIP/2.0",
+                "content-length": "0",
+            },
+        )
+        
+        data = serialize_response(response)
+        await self._transport.send(data, address)
+        logger.debug(f"Sent {status_code} {reason} to {address}")
+    
     async def _handle_incoming_invite(
         self,
         invite: "SIPRequest",
         address: Address,
     ) -> None:
         """Handle new incoming INVITE."""
+        # RFC 3261: Send 100 Trying immediately to stop retransmissions
+        await self._send_provisional_response(invite, 100, address, "Trying")
+        
         if len(self._calls) >= self._config.max_concurrent_calls:
             logger.warning("Max calls reached, rejecting incoming call")
-            # Send 503 Service Unavailable
-            # TODO: Implement proper response
+            # Send 503 Service Unavailable per RFC 3261
+            await self._send_error_response(invite, 503, address, "Service Unavailable")
             return
         
         # Import here to avoid circular import

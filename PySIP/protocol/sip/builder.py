@@ -19,6 +19,13 @@ if TYPE_CHECKING:
     from ...protocol.sdp import SDPMessage
 
 
+# RFC 3261 compliant Allow header - methods this UA supports
+ALLOW_METHODS = "INVITE, ACK, BYE, CANCEL, OPTIONS, INFO, REFER, NOTIFY"
+
+# Supported extensions
+SUPPORTED_EXTENSIONS = "replaces, timer"
+
+
 class SIPBuilder:
     """
     SIP message builder.
@@ -190,6 +197,15 @@ class SIPBuilder:
             contact = f"sip:{from_uri.user}@{self._local_ip}:{self._local_port}"
             headers["contact"] = f"<{contact}>"
         
+        # Allow header - RFC 3261 Section 20.5
+        # Include in INVITE, OPTIONS, and 405/200 responses
+        if method_str in ("INVITE", "OPTIONS", "REGISTER"):
+            headers["allow"] = ALLOW_METHODS
+        
+        # Supported header - RFC 3261 Section 20.37
+        if method_str in ("INVITE", "OPTIONS", "REGISTER", "UPDATE"):
+            headers["supported"] = SUPPORTED_EXTENSIONS
+        
         # User-Agent
         headers["user-agent"] = self._user_agent
         
@@ -284,6 +300,19 @@ class SIPBuilder:
                 else:
                     contact = f"sip:{self._local_ip}:{self._local_port}"
                 headers["contact"] = f"<{contact}>"
+        
+        # Allow header in responses - RFC 3261 Section 20.5
+        # Include in 200 OK to INVITE, OPTIONS, and 405 Method Not Allowed
+        if request.is_invite and 200 <= status_code < 300:
+            headers["allow"] = ALLOW_METHODS
+        elif request.is_options:
+            headers["allow"] = ALLOW_METHODS
+        elif status_code == 405:
+            headers["allow"] = ALLOW_METHODS
+        
+        # Supported header in responses
+        if request.is_invite and 200 <= status_code < 300:
+            headers["supported"] = SUPPORTED_EXTENSIONS
         
         # User-Agent
         headers["user-agent"] = self._user_agent

@@ -92,7 +92,7 @@ async def main():
 asyncio.run(main())
 ```
 
-### Manual Call Control
+### Advanced Call Configuration
 
 ```python
 import asyncio
@@ -106,10 +106,26 @@ async def main():
     ) as client:
         await client.register()
         
-        # Create and dial manually
-        call = client.dial("1234567890")
-        await call.dial()  # Start the call
+        # Create call and configure before connecting
+        call = client.create_call("1234567890")
         
+        # Configure call identity
+        call.set_caller_id("sip:support@company.com")
+        call.set_display_name("Support Line")
+        
+        # Add custom SIP headers
+        call.add_header("X-Campaign-ID", "promo123")
+        call.add_header("X-Account-ID", "12345")
+        
+        # Set codec preferences
+        call.set_codecs(["pcmu", "pcma"])
+        
+        # Set up event handlers
+        call.on("ringing", lambda: print("Ringing..."))
+        call.on("answered", lambda: print("Connected!"))
+        
+        # Now connect
+        await call.connect()
         await call.say("Hello!")
         await call.hangup()
 
@@ -247,9 +263,15 @@ async with client.dial("destination") as call:
     await call.say("Hello!")
     # Auto-hangup on exit
 
-# Or manual control
-call = client.dial("destination")
-await call.dial(timeout=60)
+# Advanced: Configure before connecting
+call = client.create_call("destination")
+call.set_caller_id("sip:support@company.com")   # Override From URI
+call.set_display_name("Support Line")            # Caller display name
+call.add_header("X-Campaign", "promo")           # Custom SIP headers
+call.set_codecs(["pcmu", "pcma"])                # Codec preference
+call.set_timeout(30)                             # Connection timeout
+call.on("ringing", on_ring_handler)              # Event callbacks
+await call.connect()
 
 # Media operations
 await call.say("Hello!")                        # TTS
@@ -260,6 +282,8 @@ await call.send_dtmf("1234")                    # Send DTMF
 # Call control
 await call.hold()                               # Put on hold
 await call.unhold()                             # Resume
+await call.mute()                               # Mute microphone
+await call.unmute()                             # Unmute
 await call.hangup()
 await call.transfer("other@example.com")
 
@@ -267,6 +291,7 @@ await call.transfer("other@example.com")
 call.state          # CallState enum
 call.call_id        # SIP Call-ID
 call.duration       # Call duration in seconds
+call.is_active      # True if call is active
 ```
 
 ### Error Handling

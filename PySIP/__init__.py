@@ -3,7 +3,7 @@ PySIP - High-Performance Async SIP Client
 
 A modern, asyncio-based SIP/VoIP library for Python.
 
-Example (with context manager):
+Example (simple - context manager):
     from PySIP import SIPClient
     
     async with SIPClient(
@@ -13,13 +13,14 @@ Example (with context manager):
     ) as client:
         await client.register()
         
+        # dial() returns a Call that auto-connects and auto-hangups
         async with client.dial("sip:bob@example.com") as call:
             await call.say("Hello!")
             result = await call.gather(max_digits=4, timeout=10)
             print(f"Got digits: {result.digits}")
             # Auto-hangup when exiting
 
-Example (manual control):
+Example (advanced - configure before connecting):
     from PySIP import SIPClient
     
     async with SIPClient(
@@ -29,8 +30,15 @@ Example (manual control):
     ) as client:
         await client.register()
         
-        call = client.dial("sip:bob@example.com")
-        await call.dial()  # Start the call
+        # create_call() returns unconfigured Call for advanced setup
+        call = client.create_call("sip:bob@example.com")
+        call.set_caller_id("sip:support@company.com")
+        call.set_display_name("Support Line")
+        call.add_header("X-Campaign-ID", "promo123")
+        call.set_codecs(["pcmu", "pcma"])
+        call.on("ringing", lambda: print("Ringing..."))
+        
+        await call.connect()  # Now connect
         await call.say("Hello!")
         await call.hangup()
 """

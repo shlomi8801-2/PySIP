@@ -56,6 +56,7 @@ python examples/basic_call.py --help
 | Script | Description |
 |--------|-------------|
 | `basic_call.py` | Simple outbound call with TTS greeting |
+| `advanced_call.py` | Advanced call with custom headers, caller ID, codecs |
 | `ivr_menu.py` | Incoming call handler with IVR menu |
 | `gather_pin.py` | DTMF collection and PIN validation |
 | `record_call.py` | Call recording to WAV file |
@@ -76,6 +77,40 @@ python examples/basic_call.py --to 1234567890 --message "Hello from PySIP!"
 
 # Show all options
 python examples/basic_call.py --help
+```
+
+### advanced_call.py - Advanced Call Configuration
+
+Demonstrates power-user features:
+- Custom caller ID and display name
+- Custom SIP headers
+- Codec preferences
+- Event callbacks (ringing, answered, hangup)
+
+```bash
+# With custom caller ID and display name
+python examples/advanced_call.py --to 123 \
+    --caller-id "sip:sales@company.com" \
+    --display-name "Sales Team"
+
+# With custom SIP headers
+python examples/advanced_call.py --to 123 \
+    --header "X-Campaign-ID:promo2024" \
+    --header "X-Account-ID:12345"
+
+# With codec preferences and timeout
+python examples/advanced_call.py --to 123 \
+    --codecs "pcmu,pcma" \
+    --timeout 45
+
+# Full example with all options
+python examples/advanced_call.py --to 123 \
+    --caller-id "sip:support@company.com" \
+    --display-name "Support Line" \
+    --header "X-Priority:high" \
+    --codecs "pcmu" \
+    --timeout 30 \
+    --user-agent "MyApp/1.0"
 ```
 
 ### ivr_menu.py - IVR Menu Server

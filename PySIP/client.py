@@ -54,11 +54,22 @@ class SIPClient:
             # Register with server
             await client.register()
             
-            # Make outbound call
-            call = client.make_call("sip:bob@example.com")
-            await call.start()
+            # Simple: One-step dial (returns connected call)
+            call = await client.dial("sip:bob@example.com")
             await call.say("Hello!")
             await call.hangup()
+            
+            # Or use context manager (recommended)
+            async with client.dial("sip:bob@example.com") as call:
+                await call.say("Hello!")
+                # Auto-hangup when exiting
+            
+            # Advanced: Configure call before connecting
+            call = client.create_call("sip:bob@example.com")
+            call.set_caller_id("sip:support@company.com")
+            call.add_header("X-Campaign-ID", "promo123")
+            await call.connect()
+            await call.say("Hello!")
             
             # Or handle incoming calls
             @client.on_incoming_call
@@ -446,25 +457,73 @@ class SIPClient:
             # Restore old handler using public method
             self._transport.set_data_handler(old_handler)
     
-    def dial(self, to: str, **kwargs) -> "Call":
+    def dial(self, to: str, timeout: float = 60.0, **kwargs) -> "Call":
         """
-        Create outbound call.
+        Create and connect outbound call.
+        
+        This method returns a Call object that can be used in two ways:
+        
+        1. As an async context manager (recommended):
+           The call is automatically connected on entry and hung up on exit.
+           
+        2. Awaited directly:
+           Returns a connected Call after dialing completes.
+        
+        For advanced configuration before connecting, use create_call() instead.
+        
+        Args:
+            to: Destination SIP URI or extension
+            timeout: Maximum time to wait for answer (default: 60s)
+            **kwargs: Additional call parameters
+            
+        Returns:
+            Call instance that can be awaited or used as context manager
+            
+        Example:
+            # Using context manager (recommended)
+            async with client.dial("sip:bob@example.com") as call:
+                await call.say("Hello!")
+                # Auto-hangup when exiting
+            
+            # Direct await
+            call = await client.dial("sip:bob@example.com")
+            await call.say("Hello!")
+            await call.hangup()
+        """
+        call = self.create_call(to, **kwargs)
+        call.set_timeout(timeout)
+        return call
+    
+    def create_call(self, to: str, **kwargs) -> "Call":
+        """
+        Create an unconfigured outbound call.
+        
+        Use this for advanced scenarios where you need to configure the call
+        before connecting (add custom headers, set codecs, etc.).
+        
+        For simple calls, use dial() instead which handles connection automatically.
         
         Args:
             to: Destination SIP URI or extension
             **kwargs: Additional call parameters
             
         Returns:
-            Call instance (not yet dialed)
+            Unconfigured Call instance - call connect() to start
             
         Example:
-            # Using context manager (recommended)
-            async with client.dial("sip:bob@example.com") as call:
-                await call.say("Hello!")
+            call = client.create_call("sip:bob@example.com")
             
-            # Manual dialing
-            call = client.dial("sip:bob@example.com")
-            await call.dial()  # Start the call
+            # Configure before connecting
+            call.set_caller_id("sip:support@company.com")
+            call.set_display_name("Support Line")
+            call.add_header("X-Campaign-ID", "promo123")
+            call.set_codecs(["pcmu", "pcma"])
+            call.on("ringing", lambda: print("Ringing..."))
+            
+            # Now connect
+            await call.connect()
+            await call.say("Hello!")
+            await call.hangup()
         """
         if not self._call_manager:
             raise RuntimeError("Client not started")
@@ -507,12 +566,12 @@ class SIPClient:
     # Alias for backward compatibility
     def make_call(self, to: str, **kwargs) -> "Call":
         """
-        Create outbound call (alias for dial()).
+        Create outbound call (alias for create_call()).
         
         .. deprecated::
-            Use :meth:`dial` instead.
+            Use :meth:`dial` or :meth:`create_call` instead.
         """
-        return self.dial(to, **kwargs)
+        return self.create_call(to, **kwargs)
     
     def on_incoming_call(
         self,

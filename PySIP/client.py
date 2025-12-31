@@ -401,10 +401,10 @@ class SIPClient:
         request_call_id = request.call_id
         
         # Create response future
-        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        response_future: asyncio.Future = asyncio.get_running_loop().create_future()
         
-        # Store the old handler
-        old_handler = self._transport._on_data_received
+        # Store the old handler using public method
+        old_handler = self._transport.get_data_handler()
         
         def on_response(data: bytes, addr: Address) -> None:
             try:
@@ -430,7 +430,7 @@ class SIPClient:
                     old_handler(data, addr)
         
         # Set our response handler
-        self._transport.on_data_received(on_response)
+        self._transport.set_data_handler(on_response)
         
         try:
             await self._transport.send(data, server_addr)
@@ -443,23 +443,28 @@ class SIPClient:
             return None
         
         finally:
-            # Restore old handler
-            self._transport._on_data_received = old_handler
+            # Restore old handler using public method
+            self._transport.set_data_handler(old_handler)
     
-    def make_call(self, to: str, **kwargs) -> "Call":
+    def dial(self, to: str, **kwargs) -> "Call":
         """
         Create outbound call.
         
         Args:
-            to: Destination SIP URI
+            to: Destination SIP URI or extension
             **kwargs: Additional call parameters
             
         Returns:
-            Call instance (not yet started)
+            Call instance (not yet dialed)
             
         Example:
-            call = client.make_call("sip:bob@example.com")
-            await call.start()
+            # Using context manager (recommended)
+            async with client.dial("sip:bob@example.com") as call:
+                await call.say("Hello!")
+            
+            # Manual dialing
+            call = client.dial("sip:bob@example.com")
+            await call.dial()  # Start the call
         """
         if not self._call_manager:
             raise RuntimeError("Client not started")
@@ -498,6 +503,16 @@ class SIPClient:
         self._call_manager._calls_by_call_id[call.call_id] = call
         
         return call
+    
+    # Alias for backward compatibility
+    def make_call(self, to: str, **kwargs) -> "Call":
+        """
+        Create outbound call (alias for dial()).
+        
+        .. deprecated::
+            Use :meth:`dial` instead.
+        """
+        return self.dial(to, **kwargs)
     
     def on_incoming_call(
         self,

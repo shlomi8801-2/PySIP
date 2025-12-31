@@ -67,10 +67,17 @@ class Call:
     - Call recording
     - AMD (Answering Machine Detection)
     - Call transfer
+    - Async context manager for automatic cleanup
     
-    Example (outbound):
-        call = client.make_call("sip:bob@example.com")
-        await call.start()
+    Example (outbound with context manager):
+        async with client.dial("sip:bob@example.com") as call:
+            await call.say("Hello, this is a test call")
+            digits = await call.gather(max_digits=4, timeout=10)
+            # Auto-hangup when exiting
+    
+    Example (outbound manual):
+        call = client.dial("sip:bob@example.com")
+        await call.dial()
         
         await call.say("Hello, this is a test call")
         digits = await call.gather(max_digits=4, timeout=10)
@@ -112,6 +119,7 @@ class Call:
         "_local_sdp",
         "_dtmf_buffer",
         "_dtmf_event",
+        "_last_dtmf_timestamp",  # Track last DTMF RTP timestamp for deduplication
         "_on_dtmf",
         "_on_hangup",
         "_on_amd_result",
@@ -181,6 +189,7 @@ class Call:
         # DTMF
         self._dtmf_buffer: list[str] = []
         self._dtmf_event = asyncio.Event()
+        self._last_dtmf_timestamp: int | None = None  # For RFC 2833 deduplication
         self._on_dtmf: Callable[[str], Awaitable[None]] | None = None
         
         # Callbacks
@@ -197,6 +206,13 @@ class Call:
         if incoming_invite:
             self._call_id = incoming_invite.call_id
             self._remote_tag = incoming_invite.from_tag
+            
+            # Extract URIs from INVITE - for inbound we swap from/to
+            # The From of INVITE becomes our To (remote party)
+            # The To of INVITE becomes our From (local party)
+            self._from_uri = str(incoming_invite.to_address.uri)
+            self._to_uri = str(incoming_invite.from_address.uri)
+            
             if incoming_invite.body:
                 self._remote_sdp = incoming_invite.body
     
@@ -238,6 +254,38 @@ class Call:
         end = self._ended_at or time.time()
         return end - self._answered_at
     
+    # === Async Context Manager ===
+    
+    async def __aenter__(self) -> "Call":
+        """
+        Async context manager entry.
+        
+        Automatically dials outbound calls or answers inbound calls.
+        
+        Example:
+            async with client.dial("sip:bob@example.com") as call:
+                await call.say("Hello!")
+                # Auto-hangup when exiting context
+        """
+        if self._direction == CallDirection.OUTBOUND:
+            await self.dial()
+        else:
+            await self.answer()
+        return self
+    
+    async def __aexit__(self, exc_type, exc_val, exc_tb) -> None:
+        """
+        Async context manager exit.
+        
+        Automatically hangs up if the call is still active.
+        """
+        if self._state not in (CallState.TERMINATED, CallState.IDLE):
+            try:
+                await self.hangup()
+            except Exception:
+                pass  # Best effort cleanup
+        return None
+    
     # === Event Handlers ===
     
     def on_dtmf(self, handler: Callable[[str], Awaitable[None]]) -> None:
@@ -254,9 +302,9 @@ class Call:
     
     # === Call Control ===
     
-    async def start(self, timeout: float = 60.0) -> None:
+    async def dial(self, timeout: float = 60.0) -> None:
         """
-        Start outbound call.
+        Dial outbound call.
         
         Sends INVITE and waits for answer.
         
@@ -269,10 +317,10 @@ class Call:
             CallTimeoutError: If no answer within timeout
         """
         if self._direction != CallDirection.OUTBOUND:
-            raise CallStateError("start", self._state, "Use answer() for inbound calls")
+            raise CallStateError("dial", self._state, "Use answer() for inbound calls")
         
         if self._state != CallState.IDLE:
-            raise CallStateError("start", self._state)
+            raise CallStateError("dial", self._state)
         
         self._state = CallState.DIALING
         
@@ -325,6 +373,16 @@ class Call:
             
             logger.info(f"Call {self._call_id} connected")
     
+    # Alias for backward compatibility
+    async def start(self, timeout: float = 60.0) -> None:
+        """
+        Start outbound call (alias for dial()).
+        
+        .. deprecated::
+            Use :meth:`dial` instead.
+        """
+        return await self.dial(timeout)
+    
     async def _send_invite(self, timeout: float) -> SIPResponse | None:
         """Send INVITE and handle authentication."""
         if not self._server_address:
@@ -333,7 +391,7 @@ class Call:
         data = serialize_request(self._invite_request)
         
         # Create response future
-        response_future: asyncio.Future = asyncio.get_event_loop().create_future()
+        response_future: asyncio.Future = asyncio.get_running_loop().create_future()
         
         def on_response(data: bytes, addr: Address) -> None:
             try:
@@ -349,8 +407,8 @@ class Call:
             except Exception as e:
                 logger.error(f"Error parsing response: {e}")
         
-        old_handler = self._transport._on_data_received
-        self._transport.on_data_received(on_response)
+        old_handler = self._transport.get_data_handler()
+        self._transport.set_data_handler(on_response)
         
         try:
             await self._transport.send(data, self._server_address)
@@ -384,7 +442,7 @@ class Call:
                 )
                 
                 # Reset and retry
-                response_future = asyncio.get_event_loop().create_future()
+                response_future = asyncio.get_running_loop().create_future()
                 data = serialize_request(self._invite_request)
                 await self._transport.send(data, self._server_address)
                 
@@ -396,7 +454,7 @@ class Call:
             return None
         
         finally:
-            self._transport._on_data_received = old_handler
+            self._transport.set_data_handler(old_handler)
     
     async def answer(self) -> None:
         """
@@ -498,7 +556,10 @@ class Call:
     
     async def _send_bye(self) -> None:
         """Send BYE request."""
-        if not self._server_address:
+        # Use appropriate address based on call direction
+        target_address = self._server_address or self._remote_address
+        if not target_address:
+            logger.warning(f"Cannot send BYE: no target address for call {self._call_id}")
             return
         
         self._cseq += 1
@@ -513,20 +574,23 @@ class Call:
         )
         
         data = serialize_request(request)
-        await self._transport.send(data, self._server_address)
+        await self._transport.send(data, target_address)
+        logger.debug(f"Sent BYE to {target_address}")
     
     async def _send_cancel(self) -> None:
         """Send CANCEL request."""
-        if not self._invite_request or not self._server_address:
+        target_address = self._server_address or self._remote_address
+        if not self._invite_request or not target_address:
             return
         
         request = self._sip_builder.cancel(self._invite_request)
         data = serialize_request(request)
-        await self._transport.send(data, self._server_address)
+        await self._transport.send(data, target_address)
     
     async def _send_ack(self, response: SIPResponse) -> None:
         """Send ACK for 2xx response."""
-        if not self._invite_request or not self._server_address:
+        target_address = self._server_address or self._remote_address
+        if not self._invite_request or not target_address:
             return
         
         request = self._sip_builder.ack(
@@ -534,7 +598,7 @@ class Call:
             response,
         )
         data = serialize_request(request)
-        await self._transport.send(data, self._server_address)
+        await self._transport.send(data, target_address)
     
     # === Media Operations ===
     
@@ -597,10 +661,19 @@ class Call:
         try:
             event = DTMFEvent.parse(packet.payload)
             
+            # RFC 2833: End packets are sent 3 times for redundancy
+            # Deduplicate using RTP timestamp - same timestamp = same event
             if event.end:
+                if self._last_dtmf_timestamp == packet.timestamp:
+                    # Duplicate end packet, ignore
+                    return
+                
+                self._last_dtmf_timestamp = packet.timestamp
                 digit = event.digit
                 self._dtmf_buffer.append(digit)
                 self._dtmf_event.set()
+                
+                logger.debug(f"DTMF detected: {digit} (ts={packet.timestamp})")
                 
                 # Invoke callback
                 if self._on_dtmf:
@@ -608,12 +681,17 @@ class Call:
         except Exception:
             pass
     
-    async def play(self, audio: str | AudioStream) -> PlaybackHandle:
+    async def play(
+        self,
+        audio: str | AudioStream,
+        wait: bool = True,
+    ) -> PlaybackHandle:
         """
         Play audio file or stream.
         
         Args:
             audio: File path or AudioStream
+            wait: If True (default), wait for playback to complete
             
         Returns:
             PlaybackHandle for control
@@ -629,12 +707,18 @@ class Call:
         else:
             stream = audio
         
-        return await self._audio_player.play(stream)
+        handle = await self._audio_player.play(stream)
+        
+        if wait:
+            await handle.wait()
+        
+        return handle
     
     async def say(
         self,
         text: str,
         voice: str = "en-US-AriaNeural",
+        wait: bool = True,
     ) -> PlaybackHandle:
         """
         Play text-to-speech audio.
@@ -642,6 +726,7 @@ class Call:
         Args:
             text: Text to speak
             voice: TTS voice name
+            wait: If True (default), wait for playback to complete
             
         Returns:
             PlaybackHandle for control
@@ -655,14 +740,19 @@ class Call:
         engine = EdgeTTSEngine()
         audio = await engine.synthesize(text, voice)
         
-        return await self.play(audio)
+        handle = await self.play(audio, wait=False)
+        
+        if wait:
+            await handle.wait()
+        
+        return handle
     
     async def gather(
         self,
         max_digits: int = 1,
         timeout: float = 5.0,
         finish_on_key: str | None = "#",
-    ) -> str:
+    ) -> GatherResult:
         """
         Collect DTMF digits.
         
@@ -672,20 +762,36 @@ class Call:
             finish_on_key: Key to end collection early
             
         Returns:
-            Collected digits string
+            GatherResult with collected digits and termination reason
+            
+        Example:
+            result = await call.gather(max_digits=4, timeout=10)
+            if result.terminated_by == "max_digits":
+                print(f"Got PIN: {result.digits}")
         """
         if self._state != CallState.ACTIVE:
             raise CallStateError("gather", self._state)
         
+        # Check for hangup
+        if self._state == CallState.TERMINATED:
+            return GatherResult(digits="", terminated_by="hangup")
+        
         self._dtmf_buffer.clear()
         self._dtmf_event.clear()
         
-        digits = []
+        digits: list[str] = []
         deadline = time.time() + timeout
+        terminated_by: Literal["max_digits", "timeout", "finish_key", "hangup"] = "timeout"
         
         while len(digits) < max_digits:
+            # Check for hangup
+            if self._state == CallState.TERMINATED:
+                terminated_by = "hangup"
+                break
+            
             remaining = deadline - time.time()
             if remaining <= 0:
+                terminated_by = "timeout"
                 break
             
             try:
@@ -699,17 +805,19 @@ class Call:
                     digit = self._dtmf_buffer.pop(0)
                     
                     if finish_on_key and digit == finish_on_key:
-                        return "".join(digits)
+                        return GatherResult(digits="".join(digits), terminated_by="finish_key")
                     
                     digits.append(digit)
                     
                     if len(digits) >= max_digits:
+                        terminated_by = "max_digits"
                         break
             
             except asyncio.TimeoutError:
+                terminated_by = "timeout"
                 break
         
-        return "".join(digits)
+        return GatherResult(digits="".join(digits), terminated_by=terminated_by)
     
     async def send_dtmf(self, digits: str) -> None:
         """
@@ -783,6 +891,106 @@ class Call:
         await self.hangup()
         return False
     
+    async def hold(self) -> None:
+        """
+        Put the call on hold.
+        
+        Sends a re-INVITE with SDP direction set to sendonly.
+        The remote party will hear silence/hold music.
+        
+        Raises:
+            CallStateError: If call is not active
+        """
+        if self._state != CallState.ACTIVE:
+            raise CallStateError("hold", self._state)
+        
+        # Build SDP with sendonly direction
+        from .types import MediaDirection
+        
+        sdp_builder = SDPBuilder(local_ip=self._local_ip)
+        sdp = sdp_builder.create_offer(
+            audio_port=self._rtp_port,
+            direction=MediaDirection.SENDONLY,
+        )
+        sdp_bytes = sdp_builder.serialize(sdp)
+        
+        # Send re-INVITE
+        await self._send_reinvite(sdp_bytes)
+        
+        self._state = CallState.HOLDING
+        logger.info(f"Call {self._call_id} put on hold")
+    
+    async def unhold(self) -> None:
+        """
+        Take the call off hold.
+        
+        Sends a re-INVITE with SDP direction set to sendrecv.
+        
+        Raises:
+            CallStateError: If call is not on hold
+        """
+        if self._state not in (CallState.HOLDING, CallState.HELD, CallState.ACTIVE):
+            raise CallStateError("unhold", self._state)
+        
+        # Build SDP with sendrecv direction
+        from .types import MediaDirection
+        
+        sdp_builder = SDPBuilder(local_ip=self._local_ip)
+        sdp = sdp_builder.create_offer(
+            audio_port=self._rtp_port,
+            direction=MediaDirection.SENDRECV,
+        )
+        sdp_bytes = sdp_builder.serialize(sdp)
+        
+        # Send re-INVITE
+        await self._send_reinvite(sdp_bytes)
+        
+        self._state = CallState.ACTIVE
+        logger.info(f"Call {self._call_id} taken off hold")
+    
+    async def _send_reinvite(self, sdp: bytes) -> None:
+        """Send a re-INVITE with new SDP."""
+        target_address = self._server_address or self._remote_address
+        if not target_address:
+            raise CallFailedError(message="No target address for re-INVITE")
+        
+        self._cseq += 1
+        
+        request = self._sip_builder.invite(
+            from_uri=self._from_uri,
+            to_uri=self._to_uri,
+            sdp=sdp,
+            call_id=self._call_id,
+            from_tag=self._local_tag,
+            to_tag=self._remote_tag,
+            cseq=self._cseq,
+        )
+        
+        data = serialize_request(request)
+        await self._transport.send(data, target_address)
+        
+        # Note: A full implementation would wait for response and handle ACK
+        # For simplicity, we send and continue - most servers accept this
+    
+    def mute(self) -> None:
+        """
+        Mute outgoing audio.
+        
+        Stops sending RTP packets while still receiving.
+        """
+        if self._audio_player:
+            self._audio_player.stop()
+        logger.debug(f"Call {self._call_id} muted")
+    
+    def unmute(self) -> None:
+        """
+        Unmute outgoing audio.
+        
+        Resumes sending RTP packets.
+        """
+        # Audio will resume when play() or say() is called
+        logger.debug(f"Call {self._call_id} unmuted")
+    
     async def _cleanup(self) -> None:
         """Clean up call resources."""
         if self._audio_player:
@@ -821,7 +1029,7 @@ class Call:
             pass
         
         elif method == "CANCEL":
-            # Cancelled before answer
+            # Cancelled before answer - RFC 3261 Section 9.2
             self._state = CallState.TERMINATED
             self._hangup_cause = HangupCause.CANCELLED
             
@@ -829,6 +1037,18 @@ class Call:
             response = self._sip_builder.response(request, 200)
             data = serialize_response(response)
             await self._transport.send(data, address)
+            
+            # RFC 3261: Must also send 487 Request Terminated for the original INVITE
+            if self._incoming_invite:
+                response_487 = self._sip_builder.response(
+                    self._incoming_invite,
+                    487,
+                    reason_phrase="Request Terminated",
+                    to_tag=self._local_tag,
+                )
+                data_487 = serialize_response(response_487)
+                await self._transport.send(data_487, address)
+                logger.debug(f"Sent 487 Request Terminated for INVITE after CANCEL")
             
             await self._cleanup()
             

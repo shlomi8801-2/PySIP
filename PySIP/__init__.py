@@ -3,7 +3,7 @@ PySIP - High-Performance Async SIP Client
 
 A modern, asyncio-based SIP/VoIP library for Python.
 
-Example:
+Example (with context manager):
     from PySIP import SIPClient
     
     async with SIPClient(
@@ -13,8 +13,24 @@ Example:
     ) as client:
         await client.register()
         
-        call = client.make_call("sip:bob@example.com")
-        await call.start()
+        async with client.dial("sip:bob@example.com") as call:
+            await call.say("Hello!")
+            result = await call.gather(max_digits=4, timeout=10)
+            print(f"Got digits: {result.digits}")
+            # Auto-hangup when exiting
+
+Example (manual control):
+    from PySIP import SIPClient
+    
+    async with SIPClient(
+        username="alice",
+        password="secret",
+        server="sip.example.com",
+    ) as client:
+        await client.register()
+        
+        call = client.dial("sip:bob@example.com")
+        await call.dial()  # Start the call
         await call.say("Hello!")
         await call.hangup()
 """
@@ -25,7 +41,7 @@ __license__ = "MIT"
 
 # Core client
 from .client import SIPClient, create_client
-from .call import Call
+from .call import Call, GatherResult
 
 # Types and enums
 from .types import (
@@ -39,6 +55,7 @@ from .types import (
     CodecType,
     DTMFMode,
     AMDResultType,
+    MediaDirection,
     # Config classes
     ClientConfig,
     MediaConfig,
@@ -103,6 +120,7 @@ __all__ = [
     "SIPClient",
     "create_client",
     "Call",
+    "GatherResult",
     
     # Enums
     "CallState",
@@ -115,6 +133,7 @@ __all__ = [
     "CodecType",
     "DTMFMode",
     "AMDResultType",
+    "MediaDirection",
     
     # Config
     "ClientConfig",

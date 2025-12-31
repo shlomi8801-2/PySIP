@@ -32,6 +32,14 @@ PCMA_OFFER = AudioCodecOffer(CodecType.PCMA, "PCMA", 8000)
 G722_OFFER = AudioCodecOffer(CodecType.G722, "G722", 8000)
 TELEPHONE_EVENT_OFFER = AudioCodecOffer(101, "telephone-event", 8000, fmtp="0-16")
 
+# Codec name to offer mapping
+CODEC_BY_NAME: dict[str, AudioCodecOffer] = {
+    "pcmu": PCMU_OFFER,
+    "pcma": PCMA_OFFER,
+    "g722": G722_OFFER,
+    "telephone-event": TELEPHONE_EVENT_OFFER,
+}
+
 
 class SDPBuilder:
     """
@@ -71,7 +79,7 @@ class SDPBuilder:
     def create_offer(
         self,
         audio_port: int,
-        codecs: list[AudioCodecOffer] | None = None,
+        codecs: list[AudioCodecOffer | str] | None = None,
         direction: MediaDirection = MediaDirection.SENDRECV,
         ptime: int = 20,
     ) -> SDPMessage:
@@ -80,15 +88,45 @@ class SDPBuilder:
         
         Args:
             audio_port: Local RTP port
-            codecs: Audio codecs to offer (default: PCMU, PCMA, telephone-event)
+            codecs: Audio codecs to offer. Can be:
+                    - List of AudioCodecOffer objects
+                    - List of codec names as strings (e.g., ["pcmu", "pcma"])
+                    - None (default: PCMU, PCMA, telephone-event)
             direction: Media direction
             ptime: Packetization time in ms
             
         Returns:
             SDPMessage for offer
+            
+        Example:
+            # Using codec names (recommended for simple cases)
+            sdp = builder.create_offer(audio_port=10000, codecs=["pcmu", "pcma"])
+            
+            # Using AudioCodecOffer objects (for custom configurations)
+            sdp = builder.create_offer(audio_port=10000, codecs=[PCMU_OFFER])
         """
         if codecs is None:
             codecs = [PCMU_OFFER, PCMA_OFFER, TELEPHONE_EVENT_OFFER]
+        else:
+            # Convert string names to AudioCodecOffer objects
+            resolved_codecs: list[AudioCodecOffer] = []
+            for codec in codecs:
+                if isinstance(codec, str):
+                    codec_lower = codec.lower()
+                    if codec_lower in CODEC_BY_NAME:
+                        resolved_codecs.append(CODEC_BY_NAME[codec_lower])
+                else:
+                    resolved_codecs.append(codec)
+            
+            # Always include telephone-event for DTMF support
+            has_telephone_event = any(
+                (isinstance(c, AudioCodecOffer) and c.name.lower() == "telephone-event")
+                for c in resolved_codecs
+            )
+            if not has_telephone_event:
+                resolved_codecs.append(TELEPHONE_EVENT_OFFER)
+            
+            codecs = resolved_codecs
         
         # Create audio media description
         audio_media = MediaDescription(

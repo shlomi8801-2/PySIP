@@ -82,6 +82,7 @@ class SDPBuilder:
         codecs: list[AudioCodecOffer | str] | None = None,
         direction: MediaDirection = MediaDirection.SENDRECV,
         ptime: int = 20,
+        rtcp_mux: bool = False,
     ) -> SDPMessage:
         """
         Create SDP offer for outbound call.
@@ -94,6 +95,7 @@ class SDPBuilder:
                     - None (default: PCMU, PCMA, telephone-event)
             direction: Media direction
             ptime: Packetization time in ms
+            rtcp_mux: Enable RTCP-MUX (RFC 5761) - RTP/RTCP on same port
             
         Returns:
             SDPMessage for offer
@@ -144,6 +146,13 @@ class SDPBuilder:
             if codec.fmtp:
                 audio_media.fmtp[codec.payload_type] = codec.fmtp
         
+        # Add RTCP attributes
+        if rtcp_mux:
+            audio_media.attributes["rtcp-mux"] = ""
+        else:
+            # RFC 3605 - explicit RTCP port
+            audio_media.attributes["rtcp"] = str(audio_port + 1)
+        
         return SDPMessage(
             version=0,
             origin_username=self._username,
@@ -167,6 +176,7 @@ class SDPBuilder:
         audio_port: int,
         selected_codec: int | None = None,
         direction: MediaDirection | None = None,
+        rtcp_mux: bool | None = None,
     ) -> SDPMessage:
         """
         Create SDP answer from offer.
@@ -176,6 +186,7 @@ class SDPBuilder:
             audio_port: Local RTP port
             selected_codec: Payload type to accept (default: first offered)
             direction: Override direction
+            rtcp_mux: Enable RTCP-MUX. If None, mirrors offer's rtcp-mux attribute.
             
         Returns:
             SDPMessage for answer
@@ -240,6 +251,17 @@ class SDPBuilder:
         for pt in answer_formats:
             if pt in offer_audio.fmtp:
                 audio_media.fmtp[pt] = offer_audio.fmtp[pt]
+        
+        # Handle RTCP-MUX (RFC 5761)
+        # If rtcp_mux is None, mirror the offer's setting
+        if rtcp_mux is None:
+            rtcp_mux = "rtcp-mux" in offer_audio.attributes
+        
+        if rtcp_mux:
+            audio_media.attributes["rtcp-mux"] = ""
+        else:
+            # RFC 3605 - explicit RTCP port
+            audio_media.attributes["rtcp"] = str(audio_port + 1)
         
         return SDPMessage(
             version=0,

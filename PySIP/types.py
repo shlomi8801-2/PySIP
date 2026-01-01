@@ -371,6 +371,7 @@ class RTPConfig:
     clock_rate: int = 8000
     ptime: int = 20  # Packetization time in ms
     ssrc: int | None = None
+    rtcp_mux: bool = False  # RFC 5761 - multiplex RTP/RTCP on same port
 
 
 @dataclass(slots=True)

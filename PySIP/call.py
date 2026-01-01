@@ -142,6 +142,12 @@ class Call:
         "_early_media",
         "_connect_timeout",
         "_event_handlers",
+        "_pending_tasks",  # Track async event handler tasks for cleanup
+        # Session Timer (RFC 4028)
+        "_session_expires",
+        "_min_se",
+        "_session_refresher",
+        "_session_timer_task",
     )
     
     def __init__(
@@ -227,7 +233,15 @@ class Call:
             "ringing": [],
             "answered": [],
             "hangup": [],
+            "transfer": [],  # Called when REFER is received with target URI
         }
+        self._pending_tasks: set[asyncio.Task] = set()  # Track async handler tasks
+        
+        # Session Timer (RFC 4028)
+        self._session_expires: int = 1800  # Default 30 minutes
+        self._min_se: int = 90  # Minimum session interval (90 seconds per RFC)
+        self._session_refresher: Literal["uac", "uas"] | None = None
+        self._session_timer_task: asyncio.Task | None = None
         
         # Handle incoming INVITE
         if incoming_invite:
@@ -483,15 +497,95 @@ class Call:
             logger.warning(f"Unknown event: {event}")
         return self
     
+    def set_session_timer(
+        self,
+        expires: int = 1800,
+        min_se: int = 90,
+    ) -> "Call":
+        """
+        Enable Session Timer (RFC 4028).
+        
+        Session timers automatically refresh the session to prevent it
+        from timing out due to NAT bindings or network issues.
+        
+        Must be called before connect().
+        
+        Args:
+            expires: Session interval in seconds (default 1800 = 30 min)
+            min_se: Minimum session expires (default 90 seconds per RFC)
+            
+        Returns:
+            self for method chaining
+            
+        Example:
+            call.set_session_timer(expires=300)  # 5 minute refresh
+            await call.connect()
+        """
+        if self._state != CallState.IDLE:
+            logger.warning("set_session_timer() should be called before connect()")
+        
+        self._session_expires = max(expires, min_se)
+        self._min_se = min_se
+        return self
+    
+    async def _start_session_timer(self) -> None:
+        """Start the session refresh timer."""
+        if self._session_timer_task:
+            return
+        
+        self._session_timer_task = asyncio.create_task(self._session_timer_loop())
+    
+    async def _stop_session_timer(self) -> None:
+        """Stop the session refresh timer."""
+        if self._session_timer_task:
+            self._session_timer_task.cancel()
+            try:
+                await self._session_timer_task
+            except asyncio.CancelledError:
+                pass
+            self._session_timer_task = None
+    
+    async def _session_timer_loop(self) -> None:
+        """
+        Periodic session refresh loop (RFC 4028).
+        
+        Sends re-INVITE before session expires to keep it alive.
+        Refresh is sent at half the session interval.
+        """
+        try:
+            # Refresh at half the session interval (with some margin)
+            refresh_interval = max(self._session_expires // 2 - 5, self._min_se)
+            
+            while self._state == CallState.ACTIVE:
+                await asyncio.sleep(refresh_interval)
+                
+                if self._state != CallState.ACTIVE:
+                    break
+                
+                # We're the refresher or no refresher specified
+                if self._session_refresher in (None, "uac"):
+                    logger.debug(f"Session timer: sending refresh re-INVITE for {self._call_id}")
+                    try:
+                        await self._send_reinvite()
+                    except Exception as e:
+                        logger.warning(f"Session refresh failed: {e}")
+                        # Don't kill the call on refresh failure
+                        
+        except asyncio.CancelledError:
+            pass
+    
     def _emit_event(self, event: str) -> None:
         """Emit an event to all registered handlers."""
         handlers = self._event_handlers.get(event, [])
         for handler in handlers:
             try:
                 result = handler()
-                # If handler is a coroutine, schedule it
+                # If handler is a coroutine, schedule it and track the task
                 if asyncio.iscoroutine(result):
-                    asyncio.create_task(result)
+                    task = asyncio.create_task(result)
+                    self._pending_tasks.add(task)
+                    # Remove task from set when done
+                    task.add_done_callback(self._pending_tasks.discard)
             except Exception as e:
                 logger.error(f"Error in {event} handler: {e}")
     
@@ -581,6 +675,10 @@ class Call:
             
             # Emit answered event
             self._emit_event("answered")
+            
+            # Start session timer if configured
+            if self._session_expires > 0:
+                await self._start_session_timer()
             
             # Parse remote SDP
             if response.body:
@@ -737,6 +835,11 @@ class Call:
         
         self._answered_at = time.time()
         self._state = CallState.ACTIVE
+        
+        # Start session timer if configured (for inbound calls, we're UAS)
+        if self._session_expires > 0:
+            self._session_refresher = "uas"
+            await self._start_session_timer()
         
         # Set up media
         if self._remote_sdp:
@@ -1190,6 +1293,83 @@ class Call:
         self._state = CallState.ACTIVE
         logger.info(f"Call {self._call_id} taken off hold")
     
+    async def transfer(self, target_uri: str, attended: bool = False) -> None:
+        """
+        Transfer call to another party (RFC 3515 REFER).
+        
+        Performs a blind transfer by default, sending a REFER request
+        to the remote party instructing them to call the target.
+        
+        Args:
+            target_uri: SIP URI to transfer the call to (e.g., "sip:alice@example.com")
+            attended: If True, perform attended transfer (requires establishing
+                     a consultative call first - not yet implemented)
+        
+        Raises:
+            CallStateError: If call is not active
+            NotImplementedError: If attended transfer is requested
+            
+        Example:
+            # Blind transfer
+            await call.transfer("sip:operator@example.com")
+            
+            # With phone number
+            await call.transfer(f"sip:+15551234567@{server}")
+        """
+        if self._state != CallState.ACTIVE:
+            raise CallStateError("transfer", self._state)
+        
+        if attended:
+            raise NotImplementedError("Attended transfer not yet implemented")
+        
+        await self._send_refer(target_uri)
+        logger.info(f"Call {self._call_id} transfer initiated to {target_uri}")
+    
+    async def _send_refer(self, target_uri: str) -> None:
+        """
+        Send REFER request (RFC 3515).
+        
+        Args:
+            target_uri: URI to refer the remote party to
+        """
+        from .protocol.sip.builder import serialize_request
+        from .protocol.sip.message import SIPRequest
+        
+        target_address = self._server_address or self._remote_address
+        if not target_address:
+            raise CallFailedError(message="No target address for REFER")
+        
+        if not self._to_uri or not self._from_uri:
+            raise CallFailedError(message="Missing URI for REFER")
+        
+        self._cseq += 1
+        
+        # Build REFER request
+        # Request-URI is the remote party's URI
+        to_uri_parsed = SIPUri.parse(self._to_uri) if isinstance(self._to_uri, str) else self._to_uri
+        
+        request = SIPRequest(
+            method=SIPMethod.REFER,
+            uri=to_uri_parsed,
+            headers={
+                "via": self._sip_builder._via(),
+                "from": f"<{self._from_uri}>;tag={self._local_tag}",
+                "to": f"<{self._to_uri}>" + (f";tag={self._remote_tag}" if self._remote_tag else ""),
+                "call-id": self._call_id,
+                "cseq": f"{self._cseq} REFER",
+                "contact": f"<sip:{self._sip_builder._username or 'pysip'}@{self._local_ip}:{self._local_port}>",
+                "max-forwards": "70",
+                "refer-to": f"<{target_uri}>",
+                "referred-by": f"<{self._from_uri}>",
+                "user-agent": self._custom_user_agent or self._user_agent or "PySIP/2.0",
+                "content-length": "0",
+            },
+        )
+        
+        data = serialize_request(request)
+        await self._transport.send(data, target_address)
+        logger.debug(f"Sent REFER to {target_address} for transfer to {target_uri}")
+    
     async def _send_reinvite(self, sdp: bytes) -> None:
         """Send a re-INVITE with new SDP."""
         target_address = self._server_address or self._remote_address
@@ -1235,6 +1415,15 @@ class Call:
     
     async def _cleanup(self) -> None:
         """Clean up call resources."""
+        # Cancel any pending async event handler tasks
+        for task in list(self._pending_tasks):
+            if not task.done():
+                task.cancel()
+        self._pending_tasks.clear()
+        
+        # Stop session timer
+        await self._stop_session_timer()
+        
         if self._audio_player:
             await self._audio_player.stop_async()
         
@@ -1296,6 +1485,45 @@ class Call:
             
             if self._on_hangup:
                 self._on_hangup(self._hangup_cause.value)
+        
+        elif method == "REFER":
+            # Handle incoming transfer request (RFC 3515)
+            await self._handle_refer(request, address)
+    
+    async def _handle_refer(self, request: SIPRequest, address: Address) -> None:
+        """
+        Handle incoming REFER request (RFC 3515).
+        
+        For now, we accept the REFER but don't automatically perform the transfer.
+        Applications should handle the on_transfer callback to decide what to do.
+        """
+        refer_to = request.headers.get("refer-to", "")
+        
+        # Extract target URI from Refer-To header
+        target_uri = refer_to.strip("<>").split(">")[0]
+        
+        logger.info(f"Received REFER to {target_uri}")
+        
+        # Send 202 Accepted - we'll process it
+        response = self._sip_builder.response(request, 202, reason_phrase="Accepted")
+        data = serialize_response(response)
+        await self._transport.send(data, address)
+        
+        # Store transfer target for application to handle
+        # Applications can use call.on("transfer", handler) to handle this
+        if "transfer" in self._event_handlers and self._event_handlers["transfer"]:
+            for handler in self._event_handlers["transfer"]:
+                try:
+                    result = handler(target_uri)
+                    if asyncio.iscoroutine(result):
+                        task = asyncio.create_task(result)
+                        self._pending_tasks.add(task)
+                        task.add_done_callback(self._pending_tasks.discard)
+                except Exception as e:
+                    logger.error(f"Error in transfer handler: {e}")
+        else:
+            # No handler registered - log warning
+            logger.warning(f"Received REFER to {target_uri} but no transfer handler registered")
     
     async def _handle_response(self, response: SIPResponse, address: Address) -> None:
         """Handle incoming SIP response for this call."""

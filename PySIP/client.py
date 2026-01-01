@@ -559,7 +559,6 @@ class SIPClient:
         
         # Register with manager
         self._call_manager._calls[call.call_id] = call
-        self._call_manager._calls_by_call_id[call.call_id] = call
         
         return call
     

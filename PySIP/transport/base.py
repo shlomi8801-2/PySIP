@@ -66,7 +66,7 @@ class Transport(ABC):
         self._on_data_received: Callable[[bytes, Address], None] | None = None
         self._on_state_changed: Callable[[TransportState], None] | None = None
         self._on_error: Callable[[Exception], None] | None = None
-        self._loop = loop or asyncio.get_event_loop()
+        self._loop = loop  # Will be set lazily in bind()/connect() if None
     
     @property
     def state(self) -> TransportState:
@@ -173,6 +173,10 @@ class DatagramTransport(Transport):
         if self._state != TransportState.DISCONNECTED:
             raise RuntimeError("Transport already bound")
         
+        # Get event loop lazily (must be in async context)
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
+        
         self._set_state(TransportState.CONNECTING)
         
         try:
@@ -277,6 +281,10 @@ class StreamTransport(Transport):
         """Connect to remote address."""
         if self._state != TransportState.DISCONNECTED:
             raise RuntimeError("Transport already connected")
+        
+        # Get event loop lazily (must be in async context)
+        if self._loop is None:
+            self._loop = asyncio.get_running_loop()
         
         self._set_state(TransportState.CONNECTING)
         

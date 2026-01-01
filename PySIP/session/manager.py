@@ -58,7 +58,6 @@ class CallManager:
         "_transport",
         "_config",
         "_calls",
-        "_calls_by_call_id",
         "_incoming_handler",
         "_running",
         "_cleanup_task",
@@ -80,7 +79,6 @@ class CallManager:
         self._transport = transport
         self._config = config or CallManagerConfig()
         self._calls: dict[str, "Call"] = {}  # call_id -> Call
-        self._calls_by_call_id: dict[str, "Call"] = {}
         self._incoming_handler: Callable[["Call"], Awaitable[None]] | None = None
         self._running = False
         self._cleanup_task: asyncio.Task | None = None
@@ -150,7 +148,6 @@ class CallManager:
                 logger.error(f"Error terminating call {call.call_id}: {e}")
         
         self._calls.clear()
-        self._calls_by_call_id.clear()
         
         logger.info("CallManager stopped")
     
@@ -207,7 +204,6 @@ class CallManager:
         
         # Register call
         self._calls[call.call_id] = call
-        self._calls_by_call_id[call.call_id] = call
         
         # Set up cleanup on termination
         call.on_hangup(lambda reason: self._on_call_ended(call))
@@ -216,7 +212,7 @@ class CallManager:
     
     def get_call(self, call_id: str) -> "Call | None":
         """Get call by Call-ID."""
-        return self._calls_by_call_id.get(call_id)
+        return self._calls.get(call_id)
     
     def _on_message_received(self, data: bytes, address: Address) -> None:
         """Handle incoming SIP message."""
@@ -248,7 +244,7 @@ class CallManager:
         call_id = request.call_id
         
         # Check if this belongs to an existing call
-        call = self._calls_by_call_id.get(call_id)
+        call = self._calls.get(call_id)
         
         if call:
             # Route to existing call
@@ -263,8 +259,11 @@ class CallManager:
             await self._handle_options(request, address)
         
         else:
-            # Unknown request - respond with 481 Call/Transaction Does Not Exist
+            # Unknown request - respond with 481 Call/Transaction Does Not Exist (RFC 3261)
             logger.warning(f"Request for unknown call: {call_id}")
+            await self._send_error_response(
+                request, 481, address, "Call/Transaction Does Not Exist"
+            )
     
     async def _handle_options(
         self,
@@ -278,28 +277,30 @@ class CallManager:
         logger.debug(f"Received OPTIONS from {address}")
         
         # Get To header and add tag if not present
-        to_header = request.headers.get("To", request.headers.get("to", ""))
+        # Note: All headers are normalized to lowercase by the parser
+        to_header = request.headers.get("to", "")
         if ";tag=" not in to_header:
             to_header = f"{to_header};tag={self._generate_tag()}"
         
         from ..protocol.sip.builder import ALLOW_METHODS, SUPPORTED_EXTENSIONS
         
         # Build 200 OK response
+        # Using lowercase keys as they get capitalized during serialization
         response = SIPResponse(
             status_code=200,
             reason_phrase="OK",
             headers={
-                "Via": request.headers.get("Via", request.headers.get("via", "")),
-                "From": request.headers.get("From", request.headers.get("from", "")),
-                "To": to_header,
-                "Call-ID": request.call_id,
-                "CSeq": request.headers.get("CSeq", request.headers.get("cseq", "")),
-                "Allow": ALLOW_METHODS,
-                "Accept": "application/sdp",
-                "Accept-Language": "en",
-                "Supported": SUPPORTED_EXTENSIONS,
-                "User-Agent": "PySIP/2.0",
-                "Content-Length": "0",
+                "via": request.headers.get("via", ""),
+                "from": request.headers.get("from", ""),
+                "to": to_header,
+                "call-id": request.call_id,
+                "cseq": request.headers.get("cseq", ""),
+                "allow": ALLOW_METHODS,
+                "accept": "application/sdp",
+                "accept-language": "en",
+                "supported": SUPPORTED_EXTENSIONS,
+                "user-agent": "PySIP/2.0",
+                "content-length": "0",
             },
         )
         
@@ -322,7 +323,7 @@ class CallManager:
         """Handle incoming SIP response."""
         call_id = response.call_id
         
-        call = self._calls_by_call_id.get(call_id)
+        call = self._calls.get(call_id)
         if call:
             await call._handle_response(response, address)
         else:
@@ -430,7 +431,6 @@ class CallManager:
         
         # Register call
         self._calls[call.call_id] = call
-        self._calls_by_call_id[call.call_id] = call
         
         # Set up cleanup on termination
         call.on_hangup(lambda reason: self._on_call_ended(call))
@@ -449,8 +449,6 @@ class CallManager:
         
         if call_id in self._calls:
             del self._calls[call_id]
-        if call_id in self._calls_by_call_id:
-            del self._calls_by_call_id[call_id]
         
         logger.debug(f"Call {call_id} removed from manager")
     
@@ -470,8 +468,6 @@ class CallManager:
                 for call_id in terminated:
                     if call_id in self._calls:
                         del self._calls[call_id]
-                    if call_id in self._calls_by_call_id:
-                        del self._calls_by_call_id[call_id]
                 
                 if terminated:
                     logger.debug(f"Cleaned up {len(terminated)} terminated calls")

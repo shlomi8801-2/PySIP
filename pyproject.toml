@@ -27,6 +27,17 @@ dependencies = [
     "edge-tts>=6.1.0",
     "python-dotenv>=1.0.0",
 ]
+keywords = [
+    "SIP",
+    "VoIP",
+    "telephony",
+    "RTP",
+    "async",
+    "asyncio",
+    "PBX",
+    "IVR",
+    "WebRTC",
+]
 
 [project.optional-dependencies]
 uvloop = ["uvloop>=0.19.0"]
@@ -38,22 +49,6 @@ all = [
     "uvloop>=0.19.0",
     "pytest>=8.0.0",
     "pytest-asyncio>=0.23.0",
-]
-
-keywords = [
-    "SIP",
-    "VoIP",
-    "Session Initiation Protocol",
-    "Voice over IP",
-    "telephony",
-    "RTP",
-    "async",
-    "asyncio",
-    "high-performance",
-    "PBX",
-    "IVR",
-    "call center",
-    "WebRTC",
 ]
 
 [project.urls]

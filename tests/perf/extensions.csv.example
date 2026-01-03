@@ -1,0 +1,6 @@
+username,password,server,port
+1,password001,sip.example.com,5060
+2,password002,sip.example.com,5060
+3,password003,sip.example.com,5060
+4,password004,sip.example.com,5060
+

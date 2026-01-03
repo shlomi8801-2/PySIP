@@ -9,6 +9,10 @@ secrets.ini
 *.log
 *.log.*
 
+# Load test results and credentials
+tests/perf/results/
+tests/perf/extensions.csv
+
 # Byte-compiled / optimized / DLL files
 __pycache__/
 *.py[cod]

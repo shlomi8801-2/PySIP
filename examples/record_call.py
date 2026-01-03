@@ -2,14 +2,17 @@
 """
 Call Recording Example
 
-Makes an outbound call, records the audio, and saves it to a WAV file.
+Records audio from calls and saves to WAV files.
+Supports both outbound calls (dialing out) and inbound calls (receiving).
 
 Usage:
-    # With CLI arguments
+    # OUTBOUND MODE: Dial a number and record
+    python record_call.py --to 1234567890
     python record_call.py --to 1234567890 --user alice --pass secret --server sip.example.com
     
-    # With environment variables (from .env file)
-    python record_call.py --to 1234567890
+    # INBOUND MODE: Wait for incoming calls and record them
+    python record_call.py
+    python record_call.py --user alice --pass secret --server sip.example.com
     
     # Show help
     python record_call.py --help
@@ -43,7 +46,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), '..', '.env'))
 def get_args():
     """Parse command line arguments with env var fallbacks."""
     parser = argparse.ArgumentParser(
-        description="Make a call and record audio to WAV file",
+        description="Record audio from calls (outbound or inbound)",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
 Environment Variables:
@@ -51,18 +54,27 @@ Environment Variables:
   SIP_PASSWORD    SIP account password  
   SIP_SERVER      SIP server hostname
   SIP_PORT        SIP port (default: 5060)
-  TEST_NUMBER     Default destination number
+  TEST_NUMBER     Default destination number (for outbound)
+
+Modes:
+  OUTBOUND: If --to is provided, dials the number and records the call
+  INBOUND:  If --to is NOT provided, waits for incoming calls and records them
 
 Examples:
+  # Outbound: dial and record
   python record_call.py --to 1234567890
   python record_call.py --to 1234567890 --max-duration 60
+
+  # Inbound: wait for calls and record
+  python record_call.py
+  python record_call.py --max-duration 120
         """
     )
     
     parser.add_argument(
         '--to', '-t',
         default=os.getenv('TEST_NUMBER'),
-        help='Destination number to call (or TEST_NUMBER env var)'
+        help='Destination number to call. If not provided, runs in inbound mode'
     )
     parser.add_argument(
         '--user', '-u',
@@ -102,10 +114,146 @@ Examples:
     return parser.parse_args()
 
 
+async def handle_outbound_call(client, args):
+    """Handle outbound call recording."""
+    print(f"\nDialing {args.to}...")
+    
+    try:
+        async with client.dial(args.to) as call:
+            print(f"Call connected! Call-ID: {call.call_id}")
+            
+            # Welcome message
+            await call.say(
+                "Hello! This call is being recorded. "
+                "Please say something after the beep. "
+                f"Recording will stop after {int(args.silence_timeout)} seconds of silence "
+                f"or {int(args.max_duration)} seconds total."
+            )
+            
+            # Play a beep sound (using TTS as placeholder)
+            await call.say("Beep!")
+            
+            # Start recording
+            print("\nRecording started...")
+            print(f"(Recording for up to {args.max_duration}s, or {args.silence_timeout}s of silence)")
+            
+            recording = await call.record(
+                max_duration=args.max_duration,
+                silence_timeout=args.silence_timeout,
+            )
+            
+            print(f"\nRecording finished!")
+            print(f"  Duration: {recording.duration_seconds:.1f} seconds")
+            print(f"  Audio size: {len(recording.audio)} bytes")
+            
+            # Save to file
+            filename = f"recording_{call.call_id[:8]}.wav"
+            recording.save(filename)
+            print(f"  Saved to: {filename}")
+            
+            # Thank you message
+            await call.say(
+                "Thank you for your recording. "
+                "The audio has been saved. Goodbye!"
+            )
+            
+            # Auto-hangup on context exit
+        
+        print(f"\nCall ended. Duration: {call.duration:.1f} seconds")
+        
+    except CallTimeoutError:
+        print("Call failed: No answer (timeout)")
+    except CallRejectedError as e:
+        print(f"Call rejected: {e.status_code} {e.reason}")
+    except CallFailedError as e:
+        print(f"Call failed: {e}")
+
+
+async def handle_inbound_call(call, args):
+    """Handle a single inbound call with recording."""
+    print(f"\n{'='*50}")
+    print(f"Incoming call! Call-ID: {call.call_id}")
+    print(f"From: {call._to_uri}")  # For inbound, to_uri is the caller
+    print(f"{'='*50}")
+    
+    try:
+        # Answer the call
+        await call.answer()
+        print("Call answered!")
+        
+        # Welcome message
+        await call.say(
+            "Hello! This call is being recorded. "
+            "Please say something after the beep. "
+            f"Recording will stop after {int(args.silence_timeout)} seconds of silence "
+            f"or {int(args.max_duration)} seconds total."
+        )
+        
+        # Play a beep sound
+        await call.say("Beep!")
+        
+        # Start recording
+        print("\nRecording started...")
+        print(f"(Recording for up to {args.max_duration}s, or {args.silence_timeout}s of silence)")
+        
+        recording = await call.record(
+            max_duration=args.max_duration,
+            silence_timeout=args.silence_timeout,
+        )
+        
+        print(f"\nRecording finished!")
+        print(f"  Duration: {recording.duration_seconds:.1f} seconds")
+        print(f"  Audio size: {len(recording.audio)} bytes")
+        
+        # Save to file
+        filename = f"recording_{call.call_id[:8]}.wav"
+        recording.save(filename)
+        print(f"  Saved to: {filename}")
+        
+        # Thank you message
+        await call.say(
+            "Thank you for your recording. "
+            "The audio has been saved. Goodbye!"
+        )
+        
+        # Hang up
+        await call.hangup()
+        print(f"\nCall ended. Duration: {call.duration:.1f} seconds")
+        
+    except Exception as e:
+        print(f"Error handling call: {e}")
+        try:
+            await call.hangup()
+        except Exception:
+            pass
+
+
+async def run_inbound_mode(client, args):
+    """Run in inbound mode - wait for incoming calls."""
+    print("\nWaiting for incoming calls...")
+    print("Press Ctrl+C to stop\n")
+    
+    # Set up incoming call handler
+    @client.on_incoming_call
+    async def on_call(call):
+        await handle_inbound_call(call, args)
+    
+    # Keep running until interrupted
+    try:
+        stop_event = asyncio.Event()
+        await stop_event.wait()
+    except asyncio.CancelledError:
+        pass
+
+
 async def main():
     args = get_args()
     
-    # Validate required arguments
+    # Determine mode based on --to argument
+    is_outbound = bool(args.to)
+    mode = "OUTBOUND" if is_outbound else "INBOUND"
+    
+    # Validate required arguments (--to is only required for outbound)
     missing = []
     if not args.user:
         missing.append('--user or SIP_USERNAME')
@@ -113,8 +261,6 @@ async def main():
         missing.append('--pass or SIP_PASSWORD')
     if not args.server:
         missing.append('--server or SIP_SERVER')
-    if not args.to:
-        missing.append('--to or TEST_NUMBER')
     
     if missing:
         print("Error: Missing required arguments:")
@@ -126,11 +272,12 @@ async def main():
     
     print(f"Call Recording Demo")
     print(f"==================")
+    print(f"Mode: {mode}")
     print(f"Server: {args.server}:{args.port}")
-    print(f"Destination: {args.to}")
+    if is_outbound:
+        print(f"Destination: {args.to}")
     print(f"Max duration: {args.max_duration}s")
     print(f"Silence timeout: {args.silence_timeout}s")
-    print()
     
     # Create SIP client
     async with SIPClient(
@@ -139,7 +286,7 @@ async def main():
         server=args.server,
         port=args.port,
     ) as client:
-        print("Registering with SIP server...")
+        print("\nRegistering with SIP server...")
         
         try:
             await client.register()
@@ -148,57 +295,10 @@ async def main():
             print(f"Registration failed: {e}")
             sys.exit(1)
         
-        print(f"\nDialing {args.to}...")
-        
-        try:
-            async with client.dial(args.to) as call:
-                print(f"Call connected! Call-ID: {call.call_id}")
-                
-                # Welcome message
-                await call.say(
-                    "Hello! This call is being recorded. "
-                    "Please say something after the beep. "
-                    f"Recording will stop after {int(args.silence_timeout)} seconds of silence "
-                    f"or {int(args.max_duration)} seconds total."
-                )
-                
-                # Play a beep sound (using TTS as placeholder)
-                await call.say("Beep!")
-                
-                # Start recording
-                print("\nRecording started...")
-                print(f"(Recording for up to {args.max_duration}s, or {args.silence_timeout}s of silence)")
-                
-                recording = await call.record(
-                    max_duration=args.max_duration,
-                    silence_timeout=args.silence_timeout,
-                )
-                
-                print(f"\nRecording finished!")
-                print(f"  Duration: {recording.duration:.1f} seconds")
-                print(f"  Samples: {len(recording.audio_data)} bytes")
-                
-                # Save to file
-                filename = f"recording_{call.call_id[:8]}.wav"
-                recording.save(filename)
-                print(f"  Saved to: {filename}")
-                
-                # Thank you message
-                await call.say(
-                    "Thank you for your recording. "
-                    "The audio has been saved. Goodbye!"
-                )
-                
-                # Auto-hangup on context exit
-            
-            print(f"\nCall ended. Duration: {call.duration:.1f} seconds")
-            
-        except CallTimeoutError:
-            print("Call failed: No answer (timeout)")
-        except CallRejectedError as e:
-            print(f"Call rejected: {e.status_code} {e.reason}")
-        except CallFailedError as e:
-            print(f"Call failed: {e}")
+        if is_outbound:
+            await handle_outbound_call(client, args)
+        else:
+            await run_inbound_mode(client, args)
 
 
 if __name__ == "__main__":

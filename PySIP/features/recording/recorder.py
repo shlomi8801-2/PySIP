@@ -147,6 +147,13 @@ class CallRecorder:
         # Event to signal stop
         stop_event = asyncio.Event()
         
+        # Get the call's negotiated codec (set during SDP negotiation)
+        # Falls back to PCMU if not set
+        call_codec = call._codec
+        if call_codec is None:
+            from ...media.codecs import PCMUCodec
+            call_codec = PCMUCodec()
+        
         def on_rtp_packet(data: bytes, addr) -> None:
             nonlocal bytes_recorded, last_voice_time
             
@@ -156,11 +163,9 @@ class CallRecorder:
             # Extract payload (skip RTP header)
             payload = data[12:] if len(data) > 12 else data
             
-            # Decode from codec (assuming μ-law)
+            # Decode using the call's negotiated codec
             try:
-                from ...media.codecs import PCMUCodec
-                codec = PCMUCodec()
-                pcm = codec.decode(payload)
+                pcm = call_codec.decode(payload)
                 pcm_bytes = pcm.tobytes()
                 
                 audio_chunks.append(pcm_bytes)

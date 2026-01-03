@@ -139,6 +139,7 @@ class CallRecorder:
         audio_chunks: list[bytes] = []
         start_time = time.time()
         last_voice_time = start_time
+        packets_received = 0  # Track packet count for debugging
         
         # Calculate limits
         max_bytes = int(self._max_size_mb * 1024 * 1024)
@@ -155,10 +156,12 @@ class CallRecorder:
             call_codec = PCMUCodec()
         
         def on_rtp_packet(data: bytes, addr) -> None:
-            nonlocal bytes_recorded, last_voice_time
+            nonlocal bytes_recorded, last_voice_time, packets_received
             
             if stop_event.is_set():
                 return
+            
+            packets_received += 1
             
             # Extract payload (skip RTP header)
             payload = data[12:] if len(data) > 12 else data
@@ -184,15 +187,33 @@ class CallRecorder:
                 if bytes_recorded >= max_bytes:
                     logger.warning("Recording size limit reached")
                     stop_event.set()
+                
+                # Log progress periodically
+                if packets_received == 1:
+                    logger.debug(f"First RTP packet received from {addr}")
+                elif packets_received % 500 == 0:
+                    logger.debug(f"Recording: {packets_received} packets, {bytes_recorded} bytes")
             
             except Exception as e:
                 logger.debug(f"Recording decode error: {e}")
         
-        # Hook into RTP session
+        # Hook into RTP session - chain callbacks so both recording and
+        # the call's own handler (DTMF, etc.) work simultaneously
         old_callback = None
         if call._rtp_session:
             old_callback = call._rtp_session._on_packet
-            call._rtp_session.on_packet(on_rtp_packet)
+            
+            def chained_callback(data: bytes, addr) -> None:
+                # First, call the recording handler
+                on_rtp_packet(data, addr)
+                # Then, call the original handler (for DTMF, etc.)
+                if old_callback:
+                    old_callback(data, addr)
+            
+            call._rtp_session.on_packet(chained_callback)
+            logger.debug(f"Recording started, RTP callback chained (had old: {old_callback is not None})")
+        else:
+            logger.warning("No RTP session available for recording!")
         
         try:
             # Record until conditions met
@@ -200,27 +221,34 @@ class CallRecorder:
                 # Check duration
                 elapsed = time.time() - start_time
                 if elapsed >= max_duration:
-                    logger.debug("Recording max duration reached")
+                    logger.debug(f"Recording max duration reached ({elapsed:.1f}s, {packets_received} packets)")
                     break
                 
-                # Check silence timeout
-                if silence_timeout:
+                # Check silence timeout - but only if we've received at least some packets
+                # This prevents timeout before audio stream even starts
+                if silence_timeout and packets_received > 0:
                     silence_duration = time.time() - last_voice_time
                     if silence_duration >= silence_timeout:
-                        logger.debug("Recording silence timeout")
+                        logger.debug(f"Recording silence timeout ({silence_duration:.1f}s silence, {packets_received} packets)")
                         break
                 
                 # Check call state
                 if not call.is_active:
-                    logger.debug("Call ended during recording")
+                    logger.debug(f"Call ended during recording ({packets_received} packets received)")
                     break
                 
                 await asyncio.sleep(0.1)
         
         finally:
-            # Restore callback
-            if call._rtp_session and old_callback:
-                call._rtp_session.on_packet(old_callback)
+            # Restore original callback
+            if call._rtp_session:
+                if old_callback:
+                    call._rtp_session.on_packet(old_callback)
+                    logger.debug("Recording stopped, original RTP callback restored")
+                else:
+                    # No old callback - just clear
+                    call._rtp_session._on_packet = None
+                    logger.debug("Recording stopped, RTP callback cleared")
         
         # Combine audio
         if audio_chunks:
@@ -229,6 +257,8 @@ class CallRecorder:
             audio = b""
         
         duration_ms = int((time.time() - start_time) * 1000)
+        
+        logger.info(f"Recording complete: {packets_received} packets, {len(audio)} bytes, {duration_ms}ms")
         
         return Recording(
             audio=audio,

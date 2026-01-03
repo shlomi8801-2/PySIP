@@ -719,25 +719,39 @@ class Call:
         # Create response future
         response_future: asyncio.Future = asyncio.get_running_loop().create_future()
         
+        old_handler = self._transport.get_data_handler()
+        
         def on_response(data: bytes, addr: Address) -> None:
             try:
                 parser = SIPParser()
                 msg = parser.parse(data)
-                if hasattr(msg, 'status_code') and msg.call_id == self._call_id:
-                    if msg.status_code == 100:
-                        pass  # Ignore TRYING
-                    elif msg.status_code == 180 or msg.status_code == 183:
-                        self._state = CallState.RINGING
-                        self._emit_event("ringing")
-                        # Handle early media on 183
-                        if msg.status_code == 183 and self._early_media and msg.body:
-                            self._remote_sdp = msg.body
-                    elif not response_future.done():
-                        response_future.set_result(msg)
+                if hasattr(msg, 'status_code'):
+                    # It's a response
+                    if msg.call_id == self._call_id:
+                        # Our response
+                        if msg.status_code == 100:
+                            pass  # Ignore TRYING
+                        elif msg.status_code == 180 or msg.status_code == 183:
+                            self._state = CallState.RINGING
+                            self._emit_event("ringing")
+                            # Handle early media on 183
+                            if msg.status_code == 183 and self._early_media and msg.body:
+                                self._remote_sdp = msg.body
+                        elif not response_future.done():
+                            response_future.set_result(msg)
+                    else:
+                        # Not our response, pass to old handler
+                        if old_handler:
+                            old_handler(data, addr)
+                else:
+                    # It's a request (e.g., incoming INVITE), pass to old handler
+                    if old_handler:
+                        old_handler(data, addr)
             except Exception as e:
                 logger.error(f"Error parsing response: {e}")
-        
-        old_handler = self._transport.get_data_handler()
+                # On error, try passing to old handler
+                if old_handler:
+                    old_handler(data, addr)
         self._transport.set_data_handler(on_response)
         
         try:

@@ -23,11 +23,20 @@ Output:
 
 import argparse
 import asyncio
+import logging
 import os
 import sys
 
 # Add parent directory to path for development
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+# Enable debug logging for recording
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+# Set recording module to DEBUG for detailed info
+logging.getLogger('PySIP.features.recording').setLevel(logging.DEBUG)
 
 from dotenv import load_dotenv
 from PySIP import SIPClient
@@ -181,25 +190,30 @@ async def handle_inbound_call(call, args):
         await call.answer()
         print("Call answered!")
         
-        # Welcome message
+        # Small delay to ensure RTP session is fully ready
+        await asyncio.sleep(0.2)
+        
+        # Start recording in background task so we can play greeting simultaneously
+        print("\nRecording started...")
+        print(f"(Recording for up to {args.max_duration}s, or {args.silence_timeout}s of silence)")
+        
+        recording_task = asyncio.create_task(
+            call.record(
+                max_duration=args.max_duration,
+                silence_timeout=args.silence_timeout,
+            )
+        )
+        
+        # Play welcome message WHILE recording (caller's audio is being captured)
         await call.say(
             "Hello! This call is being recorded. "
-            "Please say something after the beep. "
+            "Please say something. "
             f"Recording will stop after {int(args.silence_timeout)} seconds of silence "
             f"or {int(args.max_duration)} seconds total."
         )
         
-        # Play a beep sound
-        await call.say("Beep!")
-        
-        # Start recording
-        print("\nRecording started...")
-        print(f"(Recording for up to {args.max_duration}s, or {args.silence_timeout}s of silence)")
-        
-        recording = await call.record(
-            max_duration=args.max_duration,
-            silence_timeout=args.silence_timeout,
-        )
+        # Wait for recording to complete
+        recording = await recording_task
         
         print(f"\nRecording finished!")
         print(f"  Duration: {recording.duration_seconds:.1f} seconds")
@@ -210,7 +224,7 @@ async def handle_inbound_call(call, args):
         recording.save(filename)
         print(f"  Saved to: {filename}")
         
-        # Thank you message
+        # Thank you message (after recording is done)
         await call.say(
             "Thank you for your recording. "
             "The audio has been saved. Goodbye!"
@@ -222,6 +236,8 @@ async def handle_inbound_call(call, args):
         
     except Exception as e:
         print(f"Error handling call: {e}")
+        import traceback
+        traceback.print_exc()
         try:
             await call.hangup()
         except Exception:

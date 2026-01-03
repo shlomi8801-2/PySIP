@@ -76,6 +76,8 @@ class CallManager:
         local_port: int = 5060,
         rtp_port_range: tuple[int, int] = (10000, 20000),
     ):
+        import random
+        
         self._transport = transport
         self._config = config or CallManagerConfig()
         self._calls: dict[str, "Call"] = {}  # call_id -> Call
@@ -86,7 +88,11 @@ class CallManager:
         self._local_ip = local_ip
         self._local_port = local_port
         self._rtp_port_range = rtp_port_range
-        self._next_rtp_port = rtp_port_range[0]
+        # Randomize starting port to avoid collisions when multiple clients
+        # start on the same machine
+        range_size = (rtp_port_range[1] - rtp_port_range[0]) // 2
+        random_offset = random.randint(0, range_size - 1) * 2  # Even ports only
+        self._next_rtp_port = rtp_port_range[0] + random_offset
     
     @property
     def active_calls(self) -> int:
@@ -152,14 +158,41 @@ class CallManager:
         logger.info("CallManager stopped")
     
     def _allocate_rtp_port(self) -> int:
-        """Allocate next RTP port."""
-        port = self._next_rtp_port
-        self._next_rtp_port += 2  # RTP uses even ports
+        """
+        Allocate next available RTP port.
         
-        if self._next_rtp_port >= self._rtp_port_range[1]:
-            self._next_rtp_port = self._rtp_port_range[0]
+        Tests port availability before returning to avoid
+        'address already in use' errors when multiple clients
+        run on the same machine.
+        """
+        import socket
+        import random
         
-        return port
+        # Get the range size and try all ports if needed
+        range_start, range_end = self._rtp_port_range
+        range_size = (range_end - range_start) // 2  # Divided by 2 since RTP uses even ports
+        
+        for _ in range(range_size):
+            port = self._next_rtp_port
+            self._next_rtp_port += 2  # RTP uses even ports
+            
+            if self._next_rtp_port >= range_end:
+                self._next_rtp_port = range_start
+            
+            # Test if port is available
+            try:
+                sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                sock.bind(("0.0.0.0", port))
+                sock.close()
+                return port
+            except OSError:
+                # Port in use, try next one
+                continue
+        
+        # Fallback: return a random port in range and hope for the best
+        # This shouldn't happen in normal operation
+        return random.randrange(range_start, range_end, 2)
     
     async def create_call(
         self,
